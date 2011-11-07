@@ -749,11 +749,15 @@ class Portfolio:
 				# Add to user prices
 				# Note there may already be a user price for this date
 				
+				price = False
 				if t.pricePerShare:
 					price = t.pricePerShare
-				else:
+				elif t.shares > 0:
 					price = abs(t.total / t.shares)
-				userPrices.append(UserPrice(t.date, t.ticker, price))
+				
+				# Add user price if we found pricing information
+				if price:
+					userPrices.append(UserPrice(t.date, t.ticker, price))
 
 		# Add user prices and transaction prices to prices array
 		appended = False
