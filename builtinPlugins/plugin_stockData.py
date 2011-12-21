@@ -176,10 +176,10 @@ class StockDataModel(EditGridModel):
 					row += 1
 					currPos += 1
 				
-				# Only output stock data after the first transaction
-				if currPos < len(keys):
+				# Only output stock data after the first transaction (or everything if no data)
+				if currPos < len(keys) or not keys:
 					# Check if held on date
-					if keys[currPos] == p["date"]:
+					if keys and keys[currPos] == p["date"]:
 						data = positionData[p["date"]]
 						newRow.append(Transaction.formatFloat(data["shares"]))
 						if haveOptions:
@@ -349,6 +349,9 @@ class StockDataWidget(QWidget):
 		self.model.ticker = ticker
 
 		app = appGlobal.getApp()
+		icarraTicker = app.stockData.getIcarraTicker(ticker)
+		self.icarraTicker.setText(icarraTicker)
+
 		if ticker != app.portfolio.getLastTicker() and ticker in app.portfolio.getTickers():
 			app.portfolio.setLastTicker(ticker)
 	
@@ -690,10 +693,10 @@ class NewStockData(QDialog):
 				QMessageBox(QMessageBox.Critical, 'Duplicate Date', 'Stock data already exists on this date').exec_()
 				return
 
-			open = str(self.open.text()).strip("$").replace(",", "")
-			low = str(self.low.text()).strip("$").replace(",", "")
-			high = str(self.high.text()).strip("$").replace(",", "")
-			close = str(self.close.text()).strip("$").replace(",", "")
+			open = Transaction.preParseDollar(str(self.open.text()))
+			low = Transaction.preParseDollar(str(self.low.text()))
+			high = Transaction.preParseDollar(str(self.high.text()))
+			close = Transaction.preParseDollar(str(self.close.text()))
 			volume = str(self.volume.text()).replace(",", "")
 			
 			# Check for bad close

@@ -26,6 +26,8 @@
 from PyQt4.QtCore import *
 from PyQt4.QtGui import *
 
+import locale
+
 from plugin import *
 from editGrid import *
 from statusUpdate import *
@@ -539,7 +541,7 @@ class NewTransaction(QDialog):
 
 		type = Transaction.forEdit()[self.type.currentIndex()]
 
-		total = str(self.total.text()).strip("$").replace(",", "")
+		total = Transaction.preParseDollar(str(self.total.text()))
 		if total:
 			if type == Transaction.split:
 				totalError = "The total field should be in the form of X-Y where you receive X shares for every Y share you own.  For example 2-1 would double your shares."
@@ -559,11 +561,15 @@ class NewTransaction(QDialog):
 					return
 				total = num / den
 			else:
-				total = float(total)
+				try:
+					total = locale.atof(total)
+				except Exception, e:
+					QMessageBox(QMessageBox.Critical, "Invalid total", "The total value \"%s\" is invalid" % total).exec_()
+					return
 		else:
 			# Spinoffs, ticker changes and expenses do not have total
 			validTotal = True
-			if type in [Transaction.spinoff, Transaction.tickerChange, Transaction.expense, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign, Transaction.stockDividend, Transaction.transferIn, Transaction.transferOut]:
+			if type in [Transaction.spinoff, Transaction.tickerChange, Transaction.expense, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign, Transaction.expire, Transaction.stockDividend, Transaction.transferIn, Transaction.transferOut]:
 				pass
 			elif not type in [Transaction.spinoff, Transaction.tickerChange, Transaction.expense, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign, Transaction.stockDividend]:
 				validTotal = False
@@ -582,17 +588,29 @@ class NewTransaction(QDialog):
 			if ticker == "Cash Balance":
 				ticker = "__CASH__"
 		
-		fee = str(self.fee.text()).strip("$").replace(",", "")
+		fee = Transaction.preParseDollar(str(self.fee.text()))
 		if fee:
-			fee = float(fee)
+			try:
+				fee = locale.atof(fee)
+			except Exception, e:
+				QMessageBox(QMessageBox.Critical, "Invalid fee", "The fee value \"%s\" is invalid" % fee).exec_()
+				return
 			
 		shares = str(self.shares.text())
 		if shares:
-			shares = float(shares)
+			try:
+				shares = float(shares)
+			except Exception, e:
+				QMessageBox(QMessageBox.Critical, "Invalid shares", "The shares value \"%s\" is invalid" % shares).exec_()
+				return
 
-		pricePerShare = str(self.pricePerShare.text()).strip("$").replace(",", "")
+		pricePerShare = Transaction.preParseDollar(str(self.pricePerShare.text()))
 		if pricePerShare:
-			pricePerShare = float(pricePerShare)
+			try:
+				pricePerShare = locale.atof(pricePerShare)
+			except Exception, e:
+				QMessageBox(QMessageBox.Critical, "Invalid $/Share", "The %/Share value \"%s\" is invalid" % pricePerShare).exec_()
+				return
 		
 		# No subType or options by default
 		subType = False
@@ -600,10 +618,14 @@ class NewTransaction(QDialog):
 		optionStrike = False
 		
 		# Check for options
-		if type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign]:
-			optionStrike = str(self.strike.text()).strip("$").replace(",", "")
+		if type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign, Transaction.expire]:
+			optionStrike = Transaction.preParseDollar(str(self.strike.text()))
 			if optionStrike:
-				optionStrike = float(optionStrike)
+				try:
+					optionStrike = locale.atof(optionStrike)
+				except Exception, e:
+					QMessageBox(QMessageBox.Critical, "Invalid Strike", "The Strike value \"%s\" is invalid" % optionStrike).exec_()
+					return
 			
 			if self.isPut.isChecked():
 				subType = Transaction.optionPut
@@ -710,7 +732,7 @@ class NewTransaction(QDialog):
 			self.checkChangeTotal()
 		
 		# Enable/disable put, call for options
-		if type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.buyToClose, Transaction.sellToOpen, Transaction.exercise, Transaction.assign]:
+		if type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.buyToClose, Transaction.sellToOpen, Transaction.exercise, Transaction.assign, Transaction.expire]:
 			self.isPut.setVisible(True)
 			self.isCall.setVisible(True)
 			self.strike.setVisible(True)
@@ -743,8 +765,8 @@ class NewTransaction(QDialog):
 	
 	def checkChangeTotal(self, ignoreStr = "ignore"):
 		shares = self.shares.text()
-		pps = self.pricePerShare.text().replace("$", "").replace(",", "")
-		fee = self.fee.text().replace("$", "").replace(",", "")
+		pps = Transaction.preParseDollar(self.pricePerShare.text())
+		fee = Transaction.preParseDollar(self.fee.text())
 		
 		# If short, no total
 		type = Transaction.forEdit()[self.type.currentIndex()]
@@ -759,11 +781,10 @@ class NewTransaction(QDialog):
 		elif shares != "" and pps != "":
 			try:
 				newTotal = float(shares) * float(pps)
+				if type in [Transaction.withdrawal, Transaction.buy, Transaction.buyToOpen]:
+					newTotal = -newTotal
 				if fee != "":
-					if type in [Transaction.sellToOpen, Transaction.sell, Transaction.sellToClose]:
-						newTotal -= float(fee)
-					else:
-						newTotal += float(fee)
+					newTotal -= float(fee)
 				self.total.setText(Transaction.formatDollar(newTotal))
 			except:
 				# Bad float value most likely
@@ -810,8 +831,12 @@ class TransactionModel(EditGridModel):
 		for t in trans:
 			if not self.ticker or t.ticker == self.ticker or t.ticker2 == self.ticker:
 				self.transactionIds.append(t.uniqueId)
+				
+				type = t.formatType()
+				if t.auto:
+					type += " (auto)"
 
-				row = [t.getDate(), t.formatTicker(), t.formatType()]
+				row = [t.getDate(), t.formatTicker(), type]
 				if t.type in [Transaction.deposit, Transaction.withdrawal, Transaction.dividend, Transaction.adjustment, Transaction.expense, Transaction.split]:
 					row.append("")
 				else:
@@ -944,6 +969,10 @@ class TransactionWidget(QWidget):
 		# Loop over transactions, edit id, reselect row and finish
 		for t in appGlobal.getApp().portfolio.getTransactions():
 			if t.uniqueId == id:
+				if t.auto:
+					QMessageBox(QMessageBox.Warning, "Cannot Edit", "This tranaction was added by Icarra automatically to balance your portfolio.  It may not be edited.").exec_()
+					return
+				
 				NewTransaction(self, t).exec_()
 				
 				# Find the row for our transaction id, it may have changed
