@@ -472,9 +472,10 @@ class Portfolio:
 					tickers[t.ticker2] = t.ticker2
 					
 			# Add in positionCheck
+			# Do not include options (ends in " call" or " put")
 			cursor = self.db.select("positionCheck", what = "distinct(ticker) as ticker")
 			for row in cursor.fetchall():
-				if not row["ticker"] in tickers:
+				if not row["ticker"] in tickers and not row["ticker"].endswith(" call") and not row["ticker"].endswith(" put"):
 					tickers[row["ticker"]] = row["ticker"]
 			
 			# Optionally add allocation
@@ -740,7 +741,7 @@ class Portfolio:
 		
 		return retPrices
 	
-	def addUserAndTransactionPrices(self, ticker, prices, transactions):
+	def addUserAndTransactionPrices(self, ticker, prices, optionPrices, transactions):
 		userPrices = self.getUserPrices(ticker)
 		
 		# Use buys/sells to add to user price
@@ -757,7 +758,12 @@ class Portfolio:
 				
 				# Add user price if we found pricing information
 				if price:
-					userPrices.append(UserPrice(t.date, t.ticker, price))
+					if t.isOption():
+						if not t.formatTicker() in optionPrices:
+							optionPrices[t.formatTicker()] = []
+						optionPrices[t.formatTicker()].append({'volume': 0, 'high': price, 'low': price, 'date': t.date, 'close': price, 'open': price})
+					else:
+						userPrices.append(UserPrice(t.date, t.ticker, price))
 
 		# Add user prices and transaction prices to prices array
 		appended = False
@@ -1371,6 +1377,129 @@ class Portfolio:
 			for t in res.fetchall():
 				t["edited"] = False
 				self.db.insert('transactions', t)
+	
+	def addPositionCheckTransactions(self, ticker, transactions, portfolioFirstDate, update):
+		stockData = appGlobal.getApp().stockData
+		# See if we have a portfolio check value for this ticker
+		# If so, compute the number of shares at the first portfolio check
+		# If the shares is less, add some at the beginning
+		# If the shares is more, error
+		checks = self.getPositionCheck(ticker)
+		if checks:
+			check = checks[-1]
+			
+			# We will make 3 passes, 0, 1 and 2 days after the check
+			# At least 1 of those days must match
+			foundMatch = False
+			closest = 1e12
+			for i in (2, 1, 0):
+				shares = 0
+				targetDate = check.date + datetime.timedelta(days = i)
+
+				# First sum up number of computed shares until check
+				if ticker == "__CASH__":
+					for t in transactions:
+						# Only use check if it's valid
+						if t.date > targetDate:
+							continue
+
+						if t.type in [Transaction.deposit, Transaction.dividend, Transaction.adjustment, Transaction.withdrawal, Transaction.expense]:
+							shares += t.getTotal()
+						else:
+							if update:
+								update.addError("Unknown cash transaction when updating position check %s" % t)
+				else:
+					for t in transactions:
+						# Only use check if it's valid and ticker matches (options may have different ticker)
+						if t.date > targetDate or t.formatTicker() != ticker:
+							continue
+						
+						if t.type in [Transaction.buy, Transaction.short, Transaction.dividendReinvest, Transaction.transferIn, Transaction.buyToClose, Transaction.buyToOpen]:
+							shares += abs(t.shares)
+						elif t.type in [Transaction.sell, Transaction.cover, Transaction.transferOut, Transaction.sellToOpen, Transaction.sellToOpen]:
+							shares -= abs(t.shares)
+						elif t.type in [Transaction.stockDividend, Transaction.split]:
+							if t.type == Transaction.stockDividend:
+								adjustShares = t.shares
+							else:
+								# 2-1 split total is 2.0
+								adjustShares = shares * (t.getTotal() - 1.0)
+	
+							shares += adjustShares
+						elif t.type == Transaction.spinoff and t.ticker2 == ticker:
+							shares += abs(t.shares)
+
+				# Check for match
+				# If no match, check how close we got in the best case
+				if abs(check.shares - shares) < 1.0e-6:
+					foundMatch = True
+					break
+				elif abs(check.shares - shares) < abs(closest):
+					closest = check.shares - shares
+
+			# Now compare.  Add deposit for __CASH__, transfer for stock
+			if not foundMatch:
+				# Add shares based on the first date
+				# Get us to the closest point of matching the check
+				# Because we looped over multiple windows
+				addShares = closest
+				if update:
+					update.addMessage("Beginning %s with %.2f shares" % (ticker, addShares))
+				
+				if ticker == "__CASH__":
+					t = Transaction(
+						False,
+						ticker,
+						portfolioFirstDate,
+						Transaction.deposit,
+						addShares,
+						auto = True)
+					t.save(self.db)
+				else:
+					# Get stock value on date
+					# If not found, continue on to next days for up to one week
+					price = stockData.getNearestPrice(ticker, portfolioFirstDate)
+					if price:
+						cash = price["close"] * addShares
+						
+						# Add deposit to cash transactions
+						# NOTE: targetDate is the closest date of the transaction check when price data is found
+						t = Transaction(
+							False,
+							"__CASH__",
+							targetDate,
+							Transaction.deposit,
+							cash,
+							auto = True)
+						t.save(self.db)
+						
+						if addShares > 0:
+							t = Transaction(
+								False,
+								ticker,
+								targetDate,
+								Transaction.buy,
+								cash,
+								shares = addShares,
+								pricePerShare = price["close"],
+								auto = True)
+						else:
+							t = Transaction(
+								False,
+								ticker,
+								targetDate,
+								Transaction.sell,
+								cash,
+								shares = abs(addShares),
+								pricePerShare = price["close"],
+								auto = True)
+						t.save(self.db)
+					else:
+						if update:
+							update.addMessage("No data found for %s for position check on %s" % (ticker, check.date.strftime("%B %d, %Y")))
+			elif check.shares < shares - 1.0e-6:
+				if update:
+					update.addError("ERROR TOO MANY SHARES should be % fbut is %f" % (check.shares, shares))
 
 	def rebuildBankPositionHistory(self, update = False):
 		# Only allow one thread to update a portfolio at a time
@@ -1394,7 +1523,7 @@ class Portfolio:
 				self.db.rollbackTransaction()
 				appGlobal.getApp().endBigTask()
 				return
-
+							
 			count = 0
 			tickers = self.getTickers()
 			for ticker in tickers:
@@ -1418,6 +1547,11 @@ class Portfolio:
 					date = transactions[currentTrans].getDate()
 				
 				update.setStatus("Rebuilding " + ticker, 20 + 80 * count / len(tickers))
+				
+				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, update)
+				
+				# Reread transactions incase a transaction was added due to a position check
+				transactions = self.getTransactions(ticker, ascending = True)
 
 				# Loop until current time if cash, or until last transaction if other
 				while date < now and (currentTrans < len(transactions) or ticker == "__CASH__"):
@@ -1554,7 +1688,7 @@ class Portfolio:
 			return val
 
 		def removeFromBasis(ticker, remove):
-			while len(basis[ticker]) > 0 and abs(remove) > 0:
+			while ticker in basis and len(basis[ticker]) > 0 and abs(remove) > 0:
 				(s, pricePerShare) = basis[ticker][basis[ticker].keys()[0]]
 				if abs(s) > abs(remove):
 					basis[ticker][basis[ticker].keys()[0]] = (s - remove, pricePerShare)
@@ -1578,7 +1712,10 @@ class Portfolio:
 						combinedBasis[d] -= abs(s * pricePerShare)
 			if abs(remove) > 1.0e-6:
 				if update:
-					update.addError("Could not finish basis for %s %s %s" % (ticker, remove, basis[ticker]))
+					if ticker in basis:
+						update.addError("Could not finish basis for %s %s %s" % (ticker, remove, basis[ticker]))
+					else:
+						update.addError("Could not finish basis for %s %s (no basis)" % (ticker, remove))
 			
 		def adjustBasisStockDividend(ticker, adjustShares):
 			"""Add or remove shares from basis"""
@@ -1602,14 +1739,31 @@ class Portfolio:
 			for d in basis[ticker]:
 				(s, pps) = basis[ticker][d]
 				basis[ticker][d] = (s, pps * percent)
+		
+		def dumpOptionsBasis():
+			print "options dump"
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = longOptionsBasis[d][i]
+					print "long ", ignoreTicker, s, strike, expire, "pps", pps
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = shortOptionsBasis[d][i]
+					print "short", ignoreTicker, s, strike, expire, "pps", pps
 
 		# TODO: do not combine individual days
 		def addToOptionsBasis(ticker, d, s, pps, strike, expire):
-			if d in optionsBasis:
-				# Update basis for this day
-				optionsBasis[d].append((ticker, s, pps, strike, expire))
+			# Decide whether short or long
+			if s > 0:
+				b = longOptionsBasis
 			else:
-				optionsBasis[d] = [(ticker, s, pps, strike, expire)]
+				b = shortOptionsBasis
+			
+			if d in b:
+				# Update basis for this day
+				b[d].append((ticker, s, pps, strike, expire))
+			else:
+				b[d] = [(ticker, s, pps, strike, expire)]
 		
 			# Update combined basis
 			# TODO: Should this be done?
@@ -1620,18 +1774,26 @@ class Portfolio:
 		
 		def getOptionsShares(ticker):
 			s = 0
-			for d in optionsBasis:
-				for i in range(len(optionsBasis[d])):
-					s += optionsBasis[d][i][1]
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					s += longOptionsBasis[d][i][1]
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					s += abs(shortOptionsBasis[d][i][1])
 			return s
 		
 		def getOptionsBasis(ticker, update = False):
 			basisVal = 0
 			basisShares = 0
 			# Compute over all shares
-			for d in optionsBasis:
-				for i in range(len(optionsBasis[d])):
-					(ignoreTicker, s, pps, strike, expire) = optionsBasis[d][i]
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = longOptionsBasis[d][i]
+					basisVal += s * pps
+					basisShares += s
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = shortOptionsBasis[d][i]
 					basisVal += s * pps
 					basisShares += s
 			
@@ -1643,20 +1805,53 @@ class Portfolio:
 		def getOptionsBasisValue(ticker, update = False):
 			basisVal = 0
 			# Compute over all shares
-			for d in optionsBasis:
-				for i in range(len(optionsBasis[d])):
-					(ignoreTicker, s, pps, strike, expire) = optionsBasis[d][i]
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = longOptionsBasis[d][i]
+					basisVal += s * pps
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = shortOptionsBasis[d][i]
 					basisVal += s * pps
 			
 			return basisVal
+		
+		def getOptionsValue(ticker):
+			value = 0.0
+			
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					(optionTicker, s, pps, strike, expire) = longOptionsBasis[d][i]
+					
+					# TODO: Determine price for this option
+					price = pps
+					
+					value += s * price
+
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					(optionTicker, s, pps, strike, expire) = shortOptionsBasis[d][i]
+
+					# TODO: Determine price for this option
+					price = pps
+
+					value += (pps - price) * s
+			
+			return value
 		
 		def getSpecificOptionsBasis(optionStrike, optionExpire):
 			basisVal = 0
 			basisShares = 0
 			# Compute over matching shares
-			for d in optionsBasis:
-				for i in range(len(optionsBasis[d])):
-					(ignoreTicker, s, pps, strike, expire) = optionsBasis[d][i]
+			for d in longOptionsBasis:
+				for i in range(len(longOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = longOptionsBasis[d][i]
+					if strike == optionStrike and expire == optionExpire:
+						basisVal += s * pps
+						basisShares += s
+			for d in shortOptionsBasis:
+				for i in range(len(shortOptionsBasis[d])):
+					(ignoreTicker, s, pps, strike, expire) = shortOptionsBasis[d][i]
 					if strike == optionStrike and expire == optionExpire:
 						basisVal += s * pps
 						basisShares += s
@@ -1667,79 +1862,87 @@ class Portfolio:
 				return basisVal / basisShares
 
 		def expireOptions(ticker, optionStrike, optionExpire):
-			for d in optionsBasis:
-				for i in range(len(optionsBasis[d])):
-					(thisTicker, s, pps, strike, expire) = optionsBasis[d][i]
-					if strike == optionStrike and expire == optionExpire:
-						if s < 0:
-							# Sell to open
-							twrr.coverShares(thisTicker, abs(s) * 100, optionStrike)
-							twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
-						else:
-							# Buy to open
-							twrr.removeShares(thisTicker, abs(s), 0)
-						removeFromOptionsBasis(thisTicker, s, strike, expire)
+			for thisBasis in [longOptionsBasis, shortOptionsBasis]:
+				for d in thisBasis:
+					for i in range(len(thisBasis[d])):
+						(thisTicker, s, pps, strike, expire) = thisBasis[d][i]
+						if ticker == thisTicker and strike == optionStrike and expire == optionExpire:
+							if s < 0:
+								# Sell to open
+								twrr.coverShares(thisTicker, abs(s) * 100, optionStrike)
+								twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
+							else:
+								# Buy to open
+								twrr.removeShares(thisTicker, abs(s), 0)
+							removeFromOptionsBasis(thisTicker, s, strike, expire)
 
 		def checkOptionsExpiration(ticker, date):
 			# Return True if expired an option
 			expired = False
 			
-			for d in optionsBasis:
-				i = 0
-				while i < len(optionsBasis[d]):
-					(thisTicker, s, pps, strike, expire) = optionsBasis[d][i]
-					# Expire the day after
-					date2 = datetime.datetime(date.year, date.month, date.day)
-					expire2 = datetime.datetime(expire.year, expire.month, expire.day)
-					if date2 >= expire2:
-						expired = True
-						removeFromOptionsBasis(thisTicker, s, strike, expire)
-						if s > 0:
-							# Buy to open
-							twrr.removeShares(thisTicker, abs(s), 0)
-						elif s < 0:
-							# Sell to open
-							twrr.coverShares(thisTicker, abs(s) * 100, strike)
-							twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
-					else:
-						i += 1
+			for thisBasis in [longOptionsBasis, shortOptionsBasis]:
+				for d in thisBasis:
+					i = 0
+					while i < len(thisBasis[d]):
+						(thisTicker, s, pps, strike, expire) = thisBasis[d][i]
+						# Expire 2 days after the friday
+						date2 = datetime.datetime(date.year, date.month, date.day)
+						expire2 = datetime.datetime(expire.year, expire.month, expire.day) + datetime.timedelta(days = 2)
+						if date2 >= expire2:
+							expired = True
+							removeFromOptionsBasis(thisTicker, s, strike, expire)
+							if s > 0:
+								# Buy to open
+								twrr.removeShares(thisTicker, abs(s), 0)
+							elif s < 0:
+								# Sell to open
+								twrr.coverShares(thisTicker, abs(s) * 100, strike)
+								twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
+						else:
+							i += 1
 			
 			return expired
 		
 		def removeFromOptionsBasis(ticker, remove, strike, expire):
-			for d in optionsBasis:
+			if remove > 0:
+				thisBasis = longOptionsBasis
+			else:
+				thisBasis = shortOptionsBasis
+			
+			for d in thisBasis:
 				i = 0
-				while d in optionsBasis and i < len(optionsBasis[d]):
-					(ignoreTicker, s, pps, str, e) = optionsBasis[d][i]
-					if str != strike or e != expire:
+				while d in thisBasis and i < len(thisBasis[d]) and abs(remove) > 1.0e-6:
+					(optionTicker, s, pps, str, e) = thisBasis[d][i]
+					# Check for right ticker, strike price, expiration
+					if ticker != optionTicker or (str - strike) > 1.0e-6 or e != expire:
 						i += 1
 						continue
 					
-					if s > remove:
-						optionsBasis[d][i] = (ignoreTicker, s - remove, pps, str, e)
+					if abs(s) > abs(remove):
+						thisBasis[d][i] = (ticker, s - remove, pps, str, e)
 						remove = 0
 	
 						# Update combined basis
-						d = datetime.datetime(t.date.year, t.date.month, t.date.day)
-						if not d in combinedBasis:
-							combinedBasis[d] = 0.0
+						upd = datetime.datetime(t.date.year, t.date.month, t.date.day)
+						if not upd in combinedBasis:
+							combinedBasis[upd] = 0.0
 						else:
-							combinedBasis[d] -= abs(remove * pps)
+							combinedBasis[upd] -= abs(remove * pps)
 						i += 1
 					else:
 						# Remove all of basis
-						del optionsBasis[d][i]
+						del thisBasis[d][i]
 						remove -= s
 	
 						# Update combined basis
-						d = datetime.datetime(t.date.year, t.date.month, t.date.day)
+						upd = datetime.datetime(t.date.year, t.date.month, t.date.day)
 						if not remove in combinedBasis:
-							combinedBasis[d] = 0.0
+							combinedBasis[upd] = 0.0
 						else:
-							combinedBasis[d] -= abs(s * pps)
+							combinedBasis[upd] -= abs(s * pps)
 			if abs(remove) > 1.0e-6:
 				if update:
-					update.addError("Could not finish options basis for %s remove %f strike %f expire %s basis %f" % (ticker, remove, strike, expire, optionsBasis))
+					update.addError("Could not finish options basis for %s remove %f strike %f expire %s" % (ticker, remove, strike, expire))
 		
 		if self.isBank():
 			self.rebuildBankPositionHistory(update)
@@ -1800,9 +2003,6 @@ class Portfolio:
 			
 			# Basis dictionary key is ticker, dictionary of date, content is list of (shares, price per share)
 			basis = {}
-			
-			# Options basis key is date, content is list of (shares, price per share, strike, expire)
-			optionsBasis = {}
 	
 			# Total combined basis indexed by date
 			# First pass through = individual basis adjustments
@@ -1857,125 +2057,11 @@ class Portfolio:
 						update.addMessage("Computing position " + ticker)
 				transactions = self.getTransactions(ticker, ascending = True)
 				
-				# Reset optionsBasis for each ticker
-				optionsBasis = {}
+				# Options basis key is date, content is list of (shares, price per share, strike, expire)
+				longOptionsBasis = {}
+				shortOptionsBasis = {}
 				
-				# See if we have a portfolio check value for this ticker
-				# If so, compute the number of shares at the first portfolio check
-				# If the shares is less, add some at the beginning
-				# If the shares is more, error
-				checks = self.getPositionCheck(ticker)
-				if checks:
-					check = checks[-1]
-					
-					# We will make 3 passes, 0, 1 and 2 days after the check
-					# At least 1 of those days must match
-					foundMatch = False
-					closest = 1e12
-					for i in (2, 1, 0):
-						shares = 0
-						targetDate = check.date + datetime.timedelta(days = i)
-	
-						# First sum up number of computed shares until check
-						if ticker == "__CASH__":
-							for t in transactions:
-								# Only use check if it's valid
-								if t.date > targetDate:
-									continue
-		
-								if t.type in [Transaction.deposit, Transaction.dividend, Transaction.adjustment, Transaction.withdrawal, Transaction.expense]:
-									shares += t.getTotal()
-								else:
-									if update:
-										update.addError("Unknown cash transaction when updating position check %s" % t)
-						else:
-							for t in transactions:
-								# Only use check if it's valid
-								if t.date > targetDate:
-									continue
-								
-								if t.type in [Transaction.buy, Transaction.short, Transaction.dividendReinvest, Transaction.transferIn, Transaction.buyToClose, Transaction.buyToOpen]:
-									shares += abs(t.shares)
-								elif t.type in [Transaction.sell, Transaction.cover, Transaction.transferOut, Transaction.sellToOpen, Transaction.sellToOpen]:
-									shares -= abs(t.shares)
-								elif t.type in [Transaction.stockDividend, Transaction.split]:
-									if t.type == Transaction.stockDividend:
-										adjustShares = t.shares
-									else:
-										# 2-1 split total is 2.0
-										adjustShares = shares * (t.getTotal() - 1.0)
-			
-									shares += adjustShares
-								elif t.type == Transaction.spinoff and t.ticker2 == ticker:
-									shares += abs(t.shares)
-	
-						# Check for match
-						# If no match, check how close we got in the best case
-						if abs(check.shares - shares) < 1.0e-6:
-							foundMatch = True
-							break
-						elif abs(check.shares - shares) < abs(closest):
-							closest = check.shares - shares
-	
-					# Now compare.  Add deposit for __CASH__, transfer for stock
-					if not foundMatch:
-						# Add shares based on the first date
-						# Get us to the closest point of matching the check
-						# Because we looped over multiple windows
-						addShares = closest
-						if update:
-							update.addMessage("Beginning %s with %.2f shares" % (ticker, addShares))
-						
-						if ticker == "__CASH__":
-							t = Transaction(
-								False,
-								ticker,
-								portfolioFirstDate,
-								Transaction.adjustment,
-								addShares,
-								auto = True)
-							transactions.insert(0, t)
-							t.save(self.db)
-						else:
-							# Get stock value on date
-							# If not found, continue on to next days for up to one week
-							lookupPrice = portfolioFirstDate
-							price = False
-							count = 0
-							while not price and count < 7:
-								price = stockData.getPrice(ticker, lookupPrice)
-								lookupPrice += datetime.timedelta(days = 1)
-								count += 1
-							if price:
-								cash = price["close"] * addShares
-								
-								# Add deposit to cash transactions
-								t = Transaction(
-									False,
-									"__CASH__",
-									portfolioFirstDate,
-									Transaction.deposit,
-									cash,
-									auto = True)
-								t.save(self.db)
-								
-								t = Transaction(
-									False,
-									ticker,
-									portfolioFirstDate,
-									Transaction.buy,
-									cash,
-									shares = addShares,
-									pricePerShare = price["close"],
-									auto = True)
-								transactions.insert(0, t)
-								t.save(self.db)
-							else:
-								if update:
-									update.addMessage("No data found for %s for position check on %s" % (ticker, check.date.strftime("%B %d, %Y")))
-					elif check.shares < shares - 1.0e-6:
-						if update:
-							update.addError("ERROR TOO MANY SHARES should be % fbut is %f" % (check.shares, shares))
+				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, update)
 				
 				# Check for negative cash
 				# If negative, add deposits as needed
@@ -2020,12 +2106,18 @@ class Portfolio:
 					#	print t
 				else:
 					prices = stockData.getPrices(ticker, startDate = transactions[0].date)
+					optionPrices = {}
 					if not prices:
 						# No prices print error
 						if update:
-							update.addError("No stock data found for %s" % ticker)
-					self.addUserAndTransactionPrices(ticker, prices, transactions)
-					if not prices:
+							firstStockDate = stockData.getFirstDate(ticker)
+							lastStockDate = stockData.getLastDate(ticker)
+							if firstStockDate and lastStockDate:
+								update.addError("No usable stock data found for %s.  Icarra has data for %s from %s to %s.  The first transaction for %s is on %s." % (ticker, ticker, firstStockDate.strftime("%m/%d/%Y"), lastStockDate.strftime("%m/%d/%Y"), ticker, transactions[0].formatDate()))
+							else:
+								update.addError("No stock data found for %s" % ticker)
+					self.addUserAndTransactionPrices(ticker, prices, optionPrices, transactions)
+					if not prices and not optionPrices:
 						# Still no data, ignore
 						continue
 	
@@ -2083,21 +2175,27 @@ class Portfolio:
 						elif t.type == Transaction.buy or t.type == Transaction.transferIn:
 							# Lookup price if unavailable
 							if t.pricePerShare < 1.0e-6:
-								p = stockData.getPrice(ticker, t.date)
+								p = stockData.getNearestPrice(ticker, t.date)
 								if p:
 									t.pricePerShare = p["close"]
 									t.setTotal(t.pricePerShare * abs(t.shares) - t.getFee())
 								else:
 									if update:
-										update.addError("Buy transaction has no price per share", t)
+										update.addError("Buy transaction has no price per share %s" % t)
 									continue
 	
-							shares += abs(t.shares)
 							totalProfit -= abs(t.total)
-							twrr.addShares(ticker, t.getShares(), t.pricePerShare)
-							
-							# Add to basis tracker
-							addToBasis(ticker, t.date, t.shares, t.pricePerShare)
+							twrr.addShares(t.formatTicker(), t.getShares(), t.pricePerShare)							
+
+							# Check for transfer in option
+							if t.isOption():
+								# Add to basis tracker
+								addToOptionsBasis(t.formatTicker(), t.date, t.shares, t.pricePerShare, t.optionStrike, t.optionExpire)
+							else:
+								shares += abs(t.shares)
+
+								# Add to basis tracker
+								addToBasis(ticker, t.date, t.shares, t.pricePerShare)
 						elif t.type == Transaction.buyToOpen:
 							totalProfit -= abs(t.total)
 							# Use formatTicker() because it includes strike, option
@@ -2106,6 +2204,10 @@ class Portfolio:
 							# Add to basis tracker
 							addToOptionsBasis(t.formatTicker(), t.date, t.shares, t.pricePerShare, t.optionStrike, t.optionExpire)
 						elif t.type == Transaction.sell:
+							if shares <= 0:
+								if update:
+									update.addError("Sell transaction but no shares %s" % t)
+								continue
 							shares -= abs(t.shares)
 							totalProfit += t.getTotal()
 							twrr.removeShares(ticker, t.getShares(), t.pricePerShare)
@@ -2133,6 +2235,11 @@ class Portfolio:
 							# Add to basis tracker
 							addToBasis(ticker, t.date, -abs(t.shares), t.pricePerShare)
 						elif t.type == Transaction.cover:
+							if shares >= 0:
+								if update:
+									update.addError("Cover transaction but no shares %s" % t)
+								continue
+
 							# Cover adds to shares and removes from basis
 							shares += abs(t.shares)
 							twrr.coverShares(ticker, t.getShares(), t.pricePerShare)
@@ -2142,7 +2249,6 @@ class Portfolio:
 							removeFromBasis(ticker, -abs(t.shares))
 						elif t.type == Transaction.sellToOpen:
 							# Shorts reduce shares and add to basis
-							shares -= abs(t.shares)
 							totalProfit += t.getTotal()
 							
 							# For sellToOpen we track 2 positions: One is exposure to the underlying stock,
@@ -2157,7 +2263,6 @@ class Portfolio:
 						elif t.type == Transaction.buyToClose:
 							finalIncome = getSpecificOptionsBasis(t.optionStrike, t.optionExpire) - t.pricePerShare
 							# buyToClose adds to shares and removes from basis
-							shares += abs(t.shares)
 							twrr.coverShares(t.formatTicker(), t.getShares() * 100, t.optionStrike)
 							twrr.removeShares(t.formatTicker() + "income", abs(t.getShares()), abs(finalIncome))
 							
@@ -2191,12 +2296,12 @@ class Portfolio:
 								if t.getTotalIgnoreFee() > 0:
 									t.pricePerShare = t.getTotalIgnoreFee() / t.shares
 								else:
-									p = stockData.getPrice(ticker, t.date)
+									p = stockData.getNearestPrice(ticker, t.date)
 									if p:
 										t.pricePerShare = p["close"]
 									else:
 										if update:
-											update.addError("Dividend reinvest transaction has no price per share", t)
+											update.addError("Dividend reinvest transaction has no price per share %s" % t)
 										continue
 							
 							# Add to today's dividends, but don't count as profit
@@ -2216,7 +2321,7 @@ class Portfolio:
 									# Use last price data
 									t.pricePerShare = price
 								else:
-									p = stockData.getPrice(ticker, t.date)
+									p = stockData.getNearestPrice(ticker, t.date)
 									if p:
 										t.pricePerShare = p["close"]
 									else:
@@ -2224,13 +2329,17 @@ class Portfolio:
 											update.addError("transaction has no price per share %s" % t)
 										continue
 							
-							shares -= abs(t.shares)
 							totalProfit += t.getTotal()
-							twrr.removeShares(ticker, t.getShares(), t.pricePerShare)
-							
-							# Remove t.shares from basis tracker
-							# TODO: Handle for options?
-							removeFromBasis(ticker, abs(t.shares))
+							twrr.removeShares(t.formatTicker(), t.getShares(), t.pricePerShare)
+
+							if t.isOption():
+								# Remove t.shares from basis tracker
+								removeFromOptionsBasis(t.formatTicker(), abs(t.shares), t.optionStrike, t.optionExpire)
+							else:
+								shares -= abs(t.shares)
+
+								# Remove t.shares from basis tracker
+								removeFromBasis(ticker, abs(t.shares))
 						elif t.type in [Transaction.stockDividend, Transaction.split]:
 							if t.type == Transaction.stockDividend:
 								adjustShares = t.shares
@@ -2325,9 +2434,10 @@ class Portfolio:
 								shares -= t.getFee()
 								value -= t.getFee()
 					
-					expired = checkOptionsExpiration(ticker, date)
-					if expired:
-						totalTrans += 1
+					# Do not automatically expire options
+					#expired = checkOptionsExpiration(ticker, date)
+					#if expired:
+					#	totalTrans += 1
 					
 					try:
 						twrr.endTransactions()
@@ -2367,15 +2477,14 @@ class Portfolio:
 					elif price:
 						# Use last price
 						value = getShares(ticker) * price + adjustedValue
+					else:
+						# No price
+						value = 0
 					
 					# Update value based on options
+					# TODO: Calculate value of options better!!!
 					optionsShares = getOptionsShares(ticker)
-					optionsPrice = getOptionsBasis(ticker)
-					if optionsShares > 0:
-						value += optionsShares * optionsPrice
-					elif optionsShares < 0:
-						# Short
-						value += (optionsPrice - getOptionsBasis(ticker)) * optionsShares
+					value += getOptionsValue(ticker)
 					
 					if ticker == "__CASH__":
 						profitFee = totalProfit
@@ -2607,7 +2716,8 @@ class Portfolio:
 				update.finishSubTask("Finished rebuilding " + self.name)
 		except Exception:
 			# An error occurred.  Rollback this update.
-			self.db.rollbackTransaction()
+			if self.db.inTransaction():
+				self.db.rollbackTransaction()
 			appGlobal.getApp().endBigTask()
 			if update:
 				update.addException()

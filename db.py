@@ -322,6 +322,9 @@ class Db:
 			else:
 				self.update(table, data, on)
 		return False
+	
+	def inTransaction(self):
+		return self.transactionDepth > 0
 
 	def beginTransaction(self):
 		self.transactionDepth += 1

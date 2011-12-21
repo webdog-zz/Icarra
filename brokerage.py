@@ -44,9 +44,17 @@ class BrokerageBase:
 	def getNotes(self):
 		return []
 	
+	def massageStockInfo(self, stockInfo):
+		'''Called when saving stockinfo, optinfo, etc.'''
+		pass
+	
 	def preParseTransaction(self, trans):
 		'''Called when converting raw OFX or file data into Transactions.  The trans parameter is a ParsedTransaction dictionary.  If not over-ridden then default parsing will be used.  Return False for default parsing.  Return True to ignore.  The trans parameter may also be modified to make it better suited for regular parsing.'''
 		return False
+	
+	def postProcessTransactions(self, transactions):
+		'''Called after all transactions have been parsed'''
+		pass
 
 	def massageTransaction(self, trans):
 		'''Called when a transaction is about to be saved'''

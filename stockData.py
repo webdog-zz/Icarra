@@ -339,6 +339,23 @@ class StockData:
 			"close": float(row["close"]),
 			"volume": float(row["volume"])}
 
+	def getNearestPrice(self, ticker, date):
+		'''Return price closest to date.  Checks within +/- 7 days.'''
+		for d in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7]:
+			where = {"ticker": ticker.upper(), "date": (date + datetime.timedelta(days = d)).strftime("%Y-%m-%d 00:00:00")}
+			res = self.db.select("stockData", where = where)
+			row = res.fetchone()
+			if row:
+				return {
+					"date": Transaction.parseDate(row["date"]),
+					"open": float(row["open"]),
+					"high": float(row["high"]),
+					"low": float(row["low"]),
+					"close": float(row["close"]),
+					"volume": float(row["volume"])}
+		
+		return False
+
 	def getDividend(self, ticker, date):
 		where = {"ticker": ticker.upper(), "date": date.strftime("%Y-%m-%d 00:00:00")}
 		res = self.db.select("stockDividends", where = where)

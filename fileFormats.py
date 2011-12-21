@@ -67,6 +67,10 @@ class FileFormat:
 		self.transactions.append(transaction)
 	
 	def saveTransactions(self, portfolio):
+		brokerage = getApp().plugins.getBrokerage(portfolio.brokerage)
+		if brokerage:
+			brokerage.postProcessTransactions(self.transactions)
+		
 		numNew = 0
 		numOld = 0
 		newTickers = []
@@ -142,7 +146,7 @@ class FileFormat:
 	
 ofxTransactions = {
 	"buymf": 1,
-	"buyoption": 1,
+	"buyopt": 1,
 	"buyother": 1,
 	"buystock": 1,
 	"buydebt": 1,
@@ -153,7 +157,7 @@ ofxTransactions = {
 	"retofcap": 1,
 	"sellmf": 1,
 	"sellstock": 1,
-	"selloption": 1,
+	"sellopt": 1,
 	"sellother": 1,
 	"selldebt": 1,
 	"split": 1,
@@ -240,6 +244,9 @@ class Ofx(FileFormat):
 			stockPos = []
 			availCash = 0
 			
+			currentLedgerBal = False
+			ledgerBal = False
+			
 			endDate = False
 			
 			tagCount = 0
@@ -262,10 +269,12 @@ class Ofx(FileFormat):
 					# Create new transaction if not already in a transaction
 					self.currentTransaction = ParsedTransaction()
 					self.currentTransaction["type"] = tag.lower()
-				elif tag == "stockinfo" or tag == "mfinfo" or tag == "debtinfo" or tag == "otherinfo":
+				elif tag == "stockinfo" or tag == "mfinfo" or tag == "debtinfo" or tag == "otherinfo" or tag == "optinfo":
 					self.currentStockInfo = {}
-				elif tag == "posstock" or tag == "posmf" or tag == "posother":
+				elif tag == "posstock" or tag == "posmf" or tag == "posother" or tag == "posopt":
 					self.currentPosStock = {}
+				elif tag == "ledgerbal":
+					self.currentLedgerBal = {}
 				elif tag == "invtranlist":
 					self.inTranLevel = 1
 				
@@ -296,18 +305,22 @@ class Ofx(FileFormat):
 					self.currentTransaction = False
 				elif self.currentTransaction != False and self.currentData != False:
 					self.currentTransaction[tag] = self.currentData
-				elif tag == "stockinfo" or tag == "mfinfo" or tag == "debtinfo" or tag == "otherinfo":
+				elif tag == "stockinfo" or tag == "mfinfo" or tag == "debtinfo" or tag == "otherinfo" or tag == "optinfo":
 					#print "stockinfo = ", self.currentStockInfo
 					self.stockInfo.append(self.currentStockInfo)
 					self.currentStockInfo = False
 				elif self.currentStockInfo != False and self.currentData != False:
 					self.currentStockInfo[tag] = self.currentData
-				elif tag == "posstock" or tag == "posmf" or tag == "posother":
-					#print "posstock = ", self.currentPosStock
+				elif tag == "posstock" or tag == "posmf" or tag == "posother" or tag == "posopt":
 					self.stockPos.append(self.currentPosStock)
 					self.currentPosStock = False
+				elif tag == "ledgerbal":
+					self.ledgerBal = self.currentLedgerBal
+					self.currentLedgerBal = False
 				elif self.currentPosStock != False and self.currentData != False:
 					self.currentPosStock[tag] = self.currentData
+				elif self.currentLedgerBal != False and self.currentData != False:
+					self.currentLedgerBal[tag] = self.currentData
 				elif tag == "dtstart":
 					# Ignore dtstart
 					pass
@@ -372,24 +385,36 @@ class Ofx(FileFormat):
 		
 		# Update stockInfo table
 		ids = {}
+		stockInfos = {}
 		for i in target.stockInfo:
 			if "uniqueid" not in i:
 				status.addError("no uniqueid in %s" % (i))
+				continue
 			
-			# Use ticker first, then secname if not found
-			ticker = False
+			brokerage.massageStockInfo(i)
+			
+			# Use ticker first, then secname if ticker is not found
 			if "ticker" in i:
 				ticker = i["ticker"]
 			elif "secname" in i:
 				ticker = i["secname"]
-			if ticker is False:
+			else:
 				if status:
 					status.addError("no ticker or secname in %s" % i)
 				continue
 			# Check for duplicate ids
 			if i["uniqueid"] in ids:
 				raise Exception("Duplicate id: %s for %s, stockInfo=%s" % (i["uniqueid"], i, target.stockInfo))
+			
+			# If ticker looks like ABC^^ZZZZ then remove ^^ and everything after (OptionsXpress)
+			if ticker.find("^^") != -1:
+				ticker = ticker[0:ticker.find("^^")]
+			# OptionsXpress may provide a ticker like .XYZ when the real ticker is the first character in the memo
+			if "opttype" in i and ticker.startswith(".") and len(i["memo"]) > 0:
+				ticker = i["memo"].split(" ")[0]
+
 			ids[i["uniqueid"]] = ticker
+			stockInfos[i["uniqueid"]] = i
 			
 			# Check for new stock
 			self.checkStockInfo(
@@ -438,6 +463,8 @@ class Ofx(FileFormat):
 				if trans:
 					# Handled by brokerage preParseTransaction
 					pass
+				elif t.keyEqual("type", "ignore"):
+					continue
 				elif t.keyEqual("trntype", "credit") or t.keyEqual("trntype", "dep"):
 					if t.keyEqual("name", "Interest Paid"):
 						# ING Direct
@@ -586,7 +613,7 @@ class Ofx(FileFormat):
 							subType = Transaction.returnOfCapital)
 					elif t.keyEqual("type", "buystock") or t.keyEqual("type", "buyother") or t.keyEqual("type", "buymf") or t.keyEqual("type", "buydebt"):
 						if t.hasKey("buytype") and t.keyEqual("buytype", "buytocover"):
-							buyType = Transaction.buyToClose
+							buyType = Transaction.cover
 						else:
 							buyType = Transaction.buy
 	
@@ -601,7 +628,7 @@ class Ofx(FileFormat):
 							fees)
 					elif t.keyEqual("type", "sellstock") or t.keyEqual("type", "sellother") or t.keyEqual("type", "sellmf") or t.keyEqual("type", "selldebt"):
 						if t.hasKey("selltype") and t.keyEqual("selltype", "sellshort"):
-							sellType = Transaction.sellToOpen,
+							sellType = Transaction.short,
 						else:
 							sellType = Transaction.sell
 						
@@ -614,7 +641,77 @@ class Ofx(FileFormat):
 							shares,
 							t["unitprice"],
 							fees)
-					elif t.keyEqual("type", "reinvest"):
+					elif t.keyEqual("type", "buyopt"):
+						if not t.getKey("uniqueid") in stockInfos:
+							raise Exception
+						info = stockInfos[t.getKey("uniqueid")]
+
+						if t.keyEqual("optbuytype", "buytoclose"):
+							type = Transaction.buyToClose
+						elif t.keyEqual("optbuytype", "buytoopen"):
+							type = Transaction.buyToOpen
+						else:
+							raise Exception("Unknown optbuytype")
+						
+						optionExpire = Transaction.ofxDateToSql(info["dtexpire"])
+						
+						if info["opttype"].lower() == "put":
+							subType = Transaction.optionPut
+						elif info["opttype"].lower() == "call":
+							subType = Transaction.optionCall
+						else:
+							raise Exception("Unknown opttype")
+						
+						optionStrike = info["strikeprice"]
+						
+						trans = Transaction(
+							t["fitid"],
+							t["ticker"],
+							t.getDate(),
+							type,
+							t["total"],
+							shares,
+							t["unitprice"],
+							fees,
+							subType = subType,
+							optionExpire = optionExpire,
+							optionStrike = optionStrike)
+					elif t.keyEqual("type", "sellopt"):
+						if not t.getKey("uniqueid") in stockInfos:
+							raise Exception
+						info = stockInfos[t.getKey("uniqueid")]
+
+						if t.keyEqual("optselltype", "selltoclose"):
+							type = Transaction.sellToClose
+						elif t.keyEqual("optselltype", "selltoopen"):
+							type = Transaction.sellToOpen
+						else:
+							raise Exception("Unknown optbuytype")
+						
+						optionExpire = Transaction.ofxDateToSql(info["dtexpire"])
+						
+						if info["opttype"].lower() == "put":
+							subType = Transaction.optionPut
+						elif info["opttype"].lower() == "call":
+							subType = Transaction.optionCall
+						else:
+							raise Exception("Unknown opttype")
+						
+						optionStrike = info["strikeprice"]
+						
+						trans = Transaction(
+							t["fitid"],
+							t["ticker"],
+							t.getDate(),
+							type,
+							t["total"],
+							shares,
+							t["unitprice"],
+							fees,
+							subType = subType,
+							optionExpire = optionExpire,
+							optionStrike = optionStrike)
+					elif t.keyEqual("type", "reinvest") or t.keyEqual("type", "reinvdiv") or t.keyEqual("type", "reinvcg"):
 						trans = Transaction(
 							t["fitid"],
 							t["ticker"],
@@ -645,6 +742,15 @@ class Ofx(FileFormat):
 						if shares and pps:
 							total = abs(float(shares) * float(pps)) + abs(float(fees))
 						
+						# Check if it's an option
+						if t.getKey("uniqueid") in stockInfos and "opttype" in stockInfos[t.getKey("uniqueid")]:
+							info = stockInfos[t.getKey("uniqueid")]
+							print "IS OPTION"
+							#TODO
+						subType = False
+						optionStrike = False
+						optionExpire = False
+						
 						trans = Transaction(
 							t["fitid"],
 							t["ticker"],
@@ -653,7 +759,10 @@ class Ofx(FileFormat):
 							total,
 							shares,
 							pps,
-							fees)
+							fees,
+							subType = subType,
+							optionStrike = optionStrike,
+							optionExpire = optionExpire)
 					elif t.keyEqual("type", "transfer") and t.keyEqual("tferaction", "out"):
 						if "unitprice" in t:
 							pps = t["unitprice"]
@@ -667,6 +776,26 @@ class Ofx(FileFormat):
 						
 						if shares and pps:
 							total = abs(float(shares) * float(pps)) + abs(float(fees))
+							
+						# Check if it's an option
+						if t.getKey("uniqueid") in stockInfos and "opttype" in stockInfos[t.getKey("uniqueid")]:
+							info = stockInfos[t.getKey("uniqueid")]
+
+							optionExpire = Transaction.ofxDateToSql(info["dtexpire"])
+
+							if info["opttype"].lower() == "put":
+								subType = Transaction.optionPut
+							elif info["opttype"].lower() == "call":
+								subType = Transaction.optionCall
+							else:
+								raise Exception("Unknown opttype")
+
+							optionStrike = info["strikeprice"]
+						else:
+							# Not an option
+							subType = False
+							optionStrike = False
+							optionExpire = False
 						
 						trans = Transaction(
 							t["fitid"],
@@ -676,7 +805,10 @@ class Ofx(FileFormat):
 							total,
 							shares,
 							pps,
-							fees)
+							fees,
+							subType = subType,
+							optionStrike = optionStrike,
+							optionExpire = optionExpire)
 					elif t.keyEqual("type", "split"):
 						if t.hasKey("numerator") and t.hasKey("denominator"):
 							value = float(t["numerator"]) / float(t["denominator"])
@@ -721,11 +853,39 @@ class Ofx(FileFormat):
 					date,
 					ids[u["uniqueid"]],
 					u["unitprice"])
-				price.save(portfolio.db)				
+				price.save(portfolio.db)
+				
+				# Check if it's an option
+				if u["uniqueid"] in stockInfos and "opttype" in stockInfos[u["uniqueid"]]:
+					info = stockInfos[u["uniqueid"]]
+
+					optionExpire = Transaction.ofxDateToSql(info["dtexpire"])
 					
+					if info["opttype"].lower() == "put":
+						subType = Transaction.optionPut
+					elif info["opttype"].lower() == "call":
+						subType = Transaction.optionCall
+					else:
+						raise Exception("Unknown opttype")
+					
+					optionStrike = info["strikeprice"]
+
+					# Create a temporary transaction, then use it to get the ticker
+					tempT = Transaction(
+						uniqueId = False,
+						ticker = ids[u["uniqueid"]],
+						date = "2001-01-01 00:00:00",
+						transactionType = Transaction.buyToOpen,
+						subType = subType,
+						optionStrike = optionStrike,
+						optionExpire = optionExpire)
+					ticker = tempT.formatTicker()
+				else:
+					ticker = ids[u["uniqueid"]]
+				
 				check = PositionCheck(
 					date,
-					ids[u["uniqueid"]],
+					ticker,
 					u["units"],
 					u["mktval"])
 				check.save(portfolio.db)
@@ -737,6 +897,15 @@ class Ofx(FileFormat):
 				"__CASH__",
 				target.availCash,
 				target.availCash)
+			check.save(portfolio.db)
+		
+		# Check ledger balance for bank transactions
+		if target.ledgerBal:
+			check = PositionCheck(
+				Transaction.ofxDateToSql(target.ledgerBal['dtasof']),
+				"__CASH__",
+				target.ledgerBal['balamt'],
+				target.ledgerBal['balamt'])
 			check.save(portfolio.db)
 		
 		if status and transactionErrors:

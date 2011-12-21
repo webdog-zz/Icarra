@@ -19,7 +19,7 @@ class Basis:
 
 	def remove(self, ticker, quantity):
 		if not ticker in self.tickers:
-			print "no basis for", ticker, quantity
+			#print "no basis for", ticker, quantity
 			return
 		# Keep looping until we have removed all quantity
 		while quantity > 1.0e-6:
@@ -30,7 +30,7 @@ class Basis:
 					if minDate is False or t[0] < minDate:
 						minDate = t[0]
 			if minDate is False:
-				print "no dates for", ticker
+				#print "no dates for", ticker
 				return
 
 			# Remove shares from minimum dates
@@ -52,7 +52,7 @@ class Basis:
 							if quantity > 1.0e-6:
 								app = appGlobal.getApp()
 								if app and app.statusUpdate:
-									app.statusUpdate.addMessage("Left over quantity %s %f" % (ticker, quantity))
+									app.statusUpdate.addMessage("Left over quantity %s, shares = %f" % (ticker, quantity))
 								return
 					else:
 						# Remove some shares
@@ -63,7 +63,7 @@ class Basis:
 
 			# Makes ure something was removed
 			if removed == 0:
-				print "Could not finish basis for", ticker
+				#print "Could not finish basis for", ticker
 				break
 
 	def getShares(self, ticker):

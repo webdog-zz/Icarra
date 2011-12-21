@@ -611,6 +611,19 @@ class Transaction:
 			return locale.format(format, value, True)
 		else:
 			return format % value
+	
+	@staticmethod
+	def preParseDollar(value):
+		'''
+		Massage a dollar string such as "-$1,200.50" into "-1200.5" such that it may be converted
+		to a floating point value using locale.atof.  An invalid dollar string may not be convertible
+		to a floating point value after calling this function.  Always encompass the locale.atof
+		call in a try statement
+		'''
+		value = value.replace("$", "").replace(",", "").replace(" ", "")
+		if len(value) >= 2 and value[0] == '(' and value[-1] == ')':
+			value = '-' + value[1:-2]
+		return value
 
 	@staticmethod
 	def formatDollar(value):
@@ -723,7 +736,7 @@ class Transaction:
 		return splitVal
 	
 	def isOption(self):
-		return self.type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.assign, Transaction.exercise, Transaction.expire]
+		return self.type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.assign, Transaction.exercise, Transaction.expire] or self.optionStrike != False
 	
 	def isBankSpending(self):
 		return self.type == Transaction.withdrawal and self.ticker != "__CASH__"
