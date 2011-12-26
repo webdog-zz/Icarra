@@ -8,7 +8,7 @@ class Brokerage(BrokerageBase):
 		return "https://ofxs.ameritrade.com/cgi-bin/apps/OFX"
 	
 	def getOrg(self):
-		return "ameritrade.com"
+		return "Ameritrade"
 	
 	def getFid(self):
 		return "5024"

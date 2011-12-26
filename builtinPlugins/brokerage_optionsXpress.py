@@ -17,7 +17,7 @@ class Brokerage(BrokerageBase):
 		return "optionxpress.com"
 	
 	def getNotes(self):
-		return ["Short sales are imported as regular sell transactions"]
+		return ["Short sales are imported as regular sell transactions", "Mutual fund purchases may show up as dividend reinvestments"]
 	
 	def massageStockInfo(self, stockInfo):
 		# Use ticker first, then secname if ticker is not found
