@@ -688,7 +688,7 @@ class Transaction:
 			return ""
 		elif self.type in [Transaction.split]:
 			return self.splitValueToString(self.total)
-		elif self.type in [Transaction.sell, Transaction.deposit, Transaction.dividend]:
+		elif self.type in [Transaction.sell, Transaction.deposit, Transaction.dividend, Transaction.dividendReinvest]:
 			# Always positive
 			return self.formatDollar(abs(self.total))
 		elif self.type in [Transaction.buy, Transaction.withdrawal, Transaction.expense]:

@@ -69,7 +69,6 @@ def getConnected():
 
 def setFailConnected(val):
 	global failConnected
-	print "fail", val
 	failConnected = val
 
 def getFailConnected():

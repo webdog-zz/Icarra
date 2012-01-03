@@ -361,6 +361,30 @@ class PortfolioSettingsWidget(QWidget):
 		self.connect(self.summary2, SIGNAL("currentIndexChanged(int)"), self.newSummary2)
 		grid3.addWidget(self.summary2, 2, 1)
 
+		self.autoSplit = QCheckBox("Automatically add split transactions")
+		if portfolio.portPrefs.getAutoSplit():
+			self.autoSplit.setChecked(True)
+		self.connect(self.autoSplit, SIGNAL("clicked()"), self.twiddleAutoSplit)
+		grid.addWidget(self.autoSplit, row, 0, 1, 2)
+		row += 1
+
+		self.autoDividend = QCheckBox("Automatically add dividend transactions")
+		if portfolio.portPrefs.getAutoDividend():
+			self.autoDividend.setChecked(True)
+		self.connect(self.autoDividend, SIGNAL("clicked()"), self.twiddleAutoDividend)
+		grid.addWidget(self.autoDividend, row, 0, 1, 2)
+		row += 1
+
+		self.autoDividendReinvest = QCheckBox("Automatically reinvest dividends")
+		if portfolio.portPrefs.getAutoDividendReinvest():
+			self.autoDividendReinvest.setChecked(True)
+		if not portfolio.portPrefs.getAutoDividend():
+			self.autoDividendReinvest.setDisabled(True)
+		self.connect(self.autoDividendReinvest, SIGNAL("clicked()"), self.twiddleAutoDividendReinvest)
+		self.autoDividendReinvest.setStyleSheet("margin-left: 25px; margin-bottom: 10px")
+		grid.addWidget(self.autoDividendReinvest, row, 0, 1, 2)
+		row += 1
+
 		if portfolio.name != "S&P 500":
 			self.hasDelete = True
 			self.deleteButton = QPushButton("Delete Portfolio")
@@ -386,10 +410,16 @@ class PortfolioSettingsWidget(QWidget):
 			if self.hasDelete:
 				self.deleteButton.show()
 			self.summaryFrame.show()
+			self.autoSplit.show()
+			self.autoDividend.show()
+			self.autoDividendReinvest.show()
 		else:
 			if self.hasDelete:
 				self.deleteButton.hide()
 			self.summaryFrame.hide()
+			self.autoSplit.hide()
+			self.autoDividend.hide()
+			self.autoDividendReinvest.hide()
 	
 	def checkTutorial(self):
 		portfolio = self.app.portfolio
@@ -469,6 +499,25 @@ class PortfolioSettingsWidget(QWidget):
 		typeName = self.chartTypesList[self.summary2.currentIndex()]
 		type = revTypes[typeName]
 		self.app.portfolio.setSummaryChart2(type)
+
+	def twiddleAutoSplit(self):
+		self.app.portfolio.portPrefs.setAutoSplit(self.autoSplit.isChecked())
+		self.app.portfolio.portPrefs.setDirty(True)
+
+	def twiddleAutoDividend(self):
+		if self.autoDividend.isChecked():
+			self.app.portfolio.portPrefs.setAutoDividend(True)
+			self.autoDividendReinvest.setEnabled(True)
+		else:
+			self.app.portfolio.portPrefs.setAutoDividend(False)
+			self.app.portfolio.portPrefs.setAutoDividendReinvest(False)
+			self.autoDividendReinvest.setChecked(False)
+			self.autoDividendReinvest.setDisabled(True)
+		self.app.portfolio.portPrefs.setDirty(True)
+
+	def twiddleAutoDividendReinvest(self):
+		self.app.portfolio.portPrefs.setAutoDividendReinvest(self.autoDividendReinvest.isChecked())
+		self.app.portfolio.portPrefs.setDirty(True)
 
 	def newBrokerageInfo(self, ignore = None):
 		name = str(self.name.text())

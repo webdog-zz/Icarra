@@ -806,7 +806,10 @@ class TransactionModel(EditGridModel):
 
 		self.setTransactions()
 	
-		columns = ["Date", "Position", "Transaction", "Shares", "$/Share", "Fee", "Total"]
+		if appGlobal.getApp().portfolio.isBank():
+			columns = ["Date", "Position", "Transaction", "Fee", "Total"]
+		else:
+			columns = ["Date", "Position", "Transaction", "Shares", "$/Share", "Fee", "Total"]
 		if appGlobal.getApp().prefs.getShowCashInTransactions():
 			columns.append("Cash Balance")
 		self.setColumns(columns)
@@ -827,6 +830,9 @@ class TransactionModel(EditGridModel):
 				cash += t.getCashMod()
 				t.computedCashValue = cash
 			trans.reverse()
+		
+		autoSplit = app.portfolio.portPrefs.getAutoSplit()
+		autoDividend = app.portfolio.portPrefs.getAutoDividend()
 
 		for t in trans:
 			if not self.ticker or t.ticker == self.ticker or t.ticker2 == self.ticker:
@@ -835,13 +841,18 @@ class TransactionModel(EditGridModel):
 				type = t.formatType()
 				if t.auto:
 					type += " (auto)"
+				elif autoSplit and t.type in [Transaction.split, Transaction.stockDividend]:
+					type += " (ignored)"
+				elif autoDividend and t.type in [Transaction.dividend, Transaction.dividendReinvest] and t.ticker != "__CASH__":
+					type += " (ignored)"
 
 				row = [t.getDate(), t.formatTicker(), type]
-				if t.type in [Transaction.deposit, Transaction.withdrawal, Transaction.dividend, Transaction.adjustment, Transaction.expense, Transaction.split]:
-					row.append("")
-				else:
-					row.append(t.formatShares())
-				row.append(t.formatPricePerShare())
+				if not app.portfolio.isBank():
+					if t.type in [Transaction.deposit, Transaction.withdrawal, Transaction.dividend, Transaction.adjustment, Transaction.expense, Transaction.split]:
+						row.append("")
+					else:
+						row.append(t.formatShares())
+					row.append(t.formatPricePerShare())
 				row.append(t.formatFee())
 				row.append(t.formatTotal())
 				if showCash:

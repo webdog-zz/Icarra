@@ -77,6 +77,9 @@ class PortfolioPrefs(prefs.Prefs):
 		self.checkDefaults("combinedComponents", "")
 		self.checkDefaults("brokerage", "False")
 		self.checkDefaults("sync", "")
+		self.checkDefaults("autoSplit", "False")
+		self.checkDefaults("autoDividend", "False")
+		self.checkDefaults("autoDividendReinvest", "False")
 
 	def getTransactionId(self):
 		return uuid.uuid4().hex
@@ -126,6 +129,15 @@ class PortfolioPrefs(prefs.Prefs):
 		if not self.getPreference("sync"):
 			return []
 		return self.getPreference("sync").split(",")
+
+	def getAutoSplit(self):
+		return self.getPreference("autoSplit") == "True"
+
+	def getAutoDividend(self):
+		return self.getPreference("autoDividend") == "True"
+
+	def getAutoDividendReinvest(self):
+		return self.getPreference("autoDividendReinvest") == "True"
 
 	def setDirty(self, dirty):
 		self.db.beginTransaction()
@@ -195,6 +207,21 @@ class PortfolioPrefs(prefs.Prefs):
 	def setSync(self, value):
 		self.db.beginTransaction()
 		self.db.update("prefs", {"value": value}, {"name": "sync"})
+		self.db.commitTransaction()
+
+	def setAutoSplit(self, value):
+		self.db.beginTransaction()
+		self.db.update("prefs", {"value": value}, {"name": "autoSplit"})
+		self.db.commitTransaction()
+
+	def setAutoDividend(self, value):
+		self.db.beginTransaction()
+		self.db.update("prefs", {"value": value}, {"name": "autoDividend"})
+		self.db.commitTransaction()
+
+	def setAutoDividendReinvest(self, value):
+		self.db.beginTransaction()
+		self.db.update("prefs", {"value": value}, {"name": "autoDividendReinvest"})
 		self.db.commitTransaction()
 
 class Portfolio:	
@@ -358,7 +385,7 @@ class Portfolio:
 			# Download new stock data
 			# NOTE: This function may be called by auto-updater when rebuilding portfolios
 			# We know this is the case if status is false
-			if haveAutoUpdater and self.isBrokerage():
+			if haveAutoUpdater and not appGlobal.getFailConnected() and self.isBrokerage():
 				# Temporarily end big task so autoUpdater can run
 				app.endBigTask()
 				
@@ -1188,7 +1215,7 @@ class Portfolio:
 					date = firstDate
 			else:
 				firstDate = stockData.getFirstDate(ticker)
-				if firstDate > date:
+				if firstDate and firstDate > date:
 					date = firstDate
 		
 		# No stock data found
@@ -1378,8 +1405,10 @@ class Portfolio:
 				t["edited"] = False
 				self.db.insert('transactions', t)
 	
-	def addPositionCheckTransactions(self, ticker, transactions, portfolioFirstDate, update):
+	def addPositionCheckTransactions(self, ticker, transactions, portfolioFirstDate, cashToAdd, update):
+		'''May update the cashToAdd dictionary.  Does not add deposits or withdrawals.'''
 		stockData = appGlobal.getApp().stockData
+
 		# See if we have a portfolio check value for this ticker
 		# If so, compute the number of shares at the first portfolio check
 		# If the shares is less, add some at the beginning
@@ -1447,31 +1476,22 @@ class Portfolio:
 					update.addMessage("Beginning %s with %.2f shares" % (ticker, addShares))
 				
 				if ticker == "__CASH__":
-					t = Transaction(
-						False,
-						ticker,
-						portfolioFirstDate,
-						Transaction.deposit,
-						addShares,
-						auto = True)
-					t.save(self.db)
+					targetDate2 = datetime.datetime(portfolioFirstDate.year, portfolioFirstDate.month, portfolioFirstDate.day)
+					if not targetDate2 in cashToAdd:
+						cashToAdd[targetDate2] = 0
+					cashToAdd[targetDate2] += addShares
 				else:
 					# Get stock value on date
-					# If not found, continue on to next days for up to one week
 					price = stockData.getNearestPrice(ticker, portfolioFirstDate)
 					if price:
 						cash = price["close"] * addShares
 						
 						# Add deposit to cash transactions
 						# NOTE: targetDate is the closest date of the transaction check when price data is found
-						t = Transaction(
-							False,
-							"__CASH__",
-							targetDate,
-							Transaction.deposit,
-							cash,
-							auto = True)
-						t.save(self.db)
+						targetDate2 = datetime.datetime(targetDate.year, targetDate.month, targetDate.day)
+						if not targetDate2 in cashToAdd:
+							cashToAdd[targetDate2] = 0
+						cashToAdd[targetDate2] += cash
 						
 						if addShares > 0:
 							t = Transaction(
@@ -1501,6 +1521,133 @@ class Portfolio:
 				if update:
 					update.addError("ERROR TOO MANY SHARES should be % fbut is %f" % (check.shares, shares))
 
+	def addAutoSplitDividendTransactions(self, ticker, transactions, update):
+		if ticker == "__CASH__":
+			return
+		
+		autoSplit = self.portPrefs.getAutoSplit()
+		autoDividend = self.portPrefs.getAutoDividend()
+		autoDividendReinvest = self.portPrefs.getAutoDividendReinvest()
+		
+		# Remove all dividend and split transactions
+		if autoSplit:
+			for t in transactions[:]:
+				if t.type in [Transaction.split, Transaction.stockDividend] and not t.auto:
+					transactions.remove(t)
+		if autoDividend:
+			for t in transactions[:]:
+				if t.type in [Transaction.dividend, Transaction.dividendReinvest] and not t.auto:
+					transactions.remove(t)
+		
+		if not transactions:
+			return
+
+		# Add auto split transactions
+		splits = appGlobal.getApp().stockData.getSplits(ticker, transactions[0].date)
+		dividends = appGlobal.getApp().stockData.getDividends(ticker, transactions[0].date)
+		shares = 0
+		i = 0
+		splitIndex = 0
+		dividendIndex = 0
+		for t in transactions:
+			while splitIndex < len(splits) and splits[splitIndex]["date"] < t.date:
+				shares *= splits[splitIndex]["value"]
+				
+				# Add auto split
+				t2 = Transaction(
+					False,
+					ticker,
+					splits[splitIndex]["date"],
+					Transaction.split,
+					splits[splitIndex]["value"],
+					auto = True)
+				t2.save(self.db)
+				transactions.insert(i, t2)
+				
+				splitIndex += 1
+
+			while dividendIndex < len(dividends) and dividends[dividendIndex]["date"] < t.date:
+				# Add auto dividend
+				if autoDividendReinvest:
+					price = appGlobal.getApp().stockData.getNearestPrice(ticker, dividends[dividendIndex]["date"])
+					if price and price["close"] > 0.0:
+						buyShares = shares * dividends[dividendIndex]["value"] / price["close"]
+						shares += buyShares
+					else:
+						buyShares = False
+					
+					t2 = Transaction(
+						False,
+						ticker,
+						dividends[dividendIndex]["date"],
+						Transaction.dividendReinvest,
+						amount = shares * dividends[dividendIndex]["value"],
+						shares = buyShares,
+						auto = True)
+				else:
+					t2 = Transaction(
+						False,
+						ticker,
+						dividends[dividendIndex]["date"],
+						Transaction.dividend,
+						shares * dividends[dividendIndex]["value"],
+						auto = True)
+				t2.save(self.db)
+				transactions.insert(i, t2)
+				
+				dividendIndex += 1
+
+			if t.type in [Transaction.buy, Transaction.transferIn]:
+				shares += t.getShares()
+			elif t.type in [Transaction.sell, Transaction.transferOut]:
+				shares -= t.getShares()
+			
+			i += 1
+		
+		# Apply any remaining split and dividend transactions
+		while splitIndex < len(splits) or dividendIndex < len(dividends):
+			if splitIndex < len(splits) and (dividendIndex >= len(dividends) or splits[splitIndex]["date"] <= dividends[dividendIndex]["date"]):
+				t2 = Transaction(
+					False,
+					ticker,
+					splits[splitIndex]["date"],
+					Transaction.split,
+					splits[splitIndex]["value"],
+					auto = True)
+				t2.save(self.db)
+				transactions.append(t2)
+				
+				splitIndex += 1
+			else:
+				if autoDividendReinvest:
+					price = appGlobal.getApp().stockData.getNearestPrice(ticker, dividends[dividendIndex]["date"])
+					if price and price["close"] > 0.0:
+						buyShares = shares * dividends[dividendIndex]["value"] / price["close"]
+						shares += buyShares
+					else:
+						buyShares = False
+					
+					t2 = Transaction(
+						False,
+						ticker,
+						dividends[dividendIndex]["date"],
+						Transaction.dividendReinvest,
+						amount = shares * dividends[dividendIndex]["value"],
+						shares = buyShares,
+						auto = True)
+				else:
+					t2 = Transaction(
+						False,
+						ticker,
+						dividends[dividendIndex]["date"],
+						Transaction.dividend,
+						shares * dividends[dividendIndex]["value"],
+						auto = True)
+				t2.save(self.db)
+				transactions.append(t2)
+				
+				dividendIndex += 1
+
 	def rebuildBankPositionHistory(self, update = False):
 		# Only allow one thread to update a portfolio at a time
 		appGlobal.getApp().beginBigTask('rebuilding ' + self.name, update)
@@ -1523,7 +1670,10 @@ class Portfolio:
 				self.db.rollbackTransaction()
 				appGlobal.getApp().endBigTask()
 				return
-							
+			
+			# cashToAdd[date] = deposit amount
+			cashToAdd = {}
+			
 			count = 0
 			tickers = self.getTickers()
 			for ticker in tickers:
@@ -1548,7 +1698,31 @@ class Portfolio:
 				
 				update.setStatus("Rebuilding " + ticker, 20 + 80 * count / len(tickers))
 				
-				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, update)
+				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, cashToAdd, update)
+				
+				if ticker == "__CASH__" and cashToAdd:
+					for date, amount in cashToAdd.items():
+						if amount > 0:
+							t2 = Transaction(
+								False,
+								"__CASH__",
+								date,
+								Transaction.deposit,
+								amount,
+								auto = True)
+						else:
+							t2 = Transaction(
+								False,
+								"__CASH__",
+								date,
+								Transaction.withdrawal,
+								-amount,
+								auto = True)
+						t2.save(self.db)
+					
+					# Re-read transactions from database
+					self.readFromDb()
+					transactions = self.getTransactions(ticker, ascending = True)
 				
 				# Reread transactions incase a transaction was added due to a position check
 				transactions = self.getTransactions(ticker, ascending = True)
@@ -2041,6 +2215,9 @@ class Portfolio:
 						# Move ticker back one
 						index = tickers.index(ticker)
 						tickers = tickers[:index] + [tickers[index + 1], ticker] + tickers[index + 2:]
+			
+			# cashToAdd[date] = deposit amount
+			cashToAdd = {}
 	
 			count = 0
 			for ticker in tickers:
@@ -2050,43 +2227,60 @@ class Portfolio:
 						break
 				count += 1
 				
-				if update:
-					if ticker == "__CASH__":
-						update.addMessage("Computing cash position")
-					else:
-						update.addMessage("Computing position " + ticker)
+				#if update:
+				#	if ticker == "__CASH__":
+				#		update.addMessage("Computing cash position")
+				#	else:
+				#		update.addMessage("Computing position " + ticker)
 				transactions = self.getTransactions(ticker, ascending = True)
 				
 				# Options basis key is date, content is list of (shares, price per share, strike, expire)
 				longOptionsBasis = {}
 				shortOptionsBasis = {}
 				
-				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, update)
+				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, cashToAdd, update)
 				
+				if self.portPrefs.getAutoSplit() or self.portPrefs.getAutoDividend():
+					self.addAutoSplitDividendTransactions(ticker, transactions, update)
+
 				# Check for negative cash
 				# If negative, add deposits as needed
 				if ticker == "__CASH__":
 					currentCash = 0.0
-					added = False
 					for t in transactions:
 						currentCash += t.getCashMod()
 						if currentCash < 0:
-							added = True
-							
 							# Add deposit
 							depositAmount = -currentCash
 							currentCash += depositAmount
 
-							# Add deposit to cash transactions
-							t = Transaction(
-								False,
-								"__CASH__",
-								t.date,
-								Transaction.deposit,
-								depositAmount,
-								auto = True)
-							t.save(self.db)
-					if added:
+							targetDate = datetime.datetime(t.date.year, t.date.month, t.date.day)
+							if not targetDate in cashToAdd:
+								cashToAdd[targetDate] = 0.0
+							cashToAdd[targetDate] += depositAmount
+
+					# Add deposits to cash transactions
+					if cashToAdd:
+						for date, amount in cashToAdd.items():
+							if amount > 0:
+								t2 = Transaction(
+									False,
+									"__CASH__",
+									date,
+									Transaction.deposit,
+									amount,
+									auto = True)
+							else:
+								t2 = Transaction(
+									False,
+									"__CASH__",
+									date,
+									Transaction.withdrawal,
+									-amount,
+									auto = True)
+							t2.save(self.db)
+						
+						# Re-read transactions from database
 						self.readFromDb()
 						transactions = self.getTransactions(ticker, ascending = True)
 				
@@ -2293,7 +2487,7 @@ class Portfolio:
 								totalProfit -= t.getFee()
 						elif t.type == Transaction.dividendReinvest:
 							if t.pricePerShare < 1.0e-6:
-								if t.getTotalIgnoreFee() > 0:
+								if t.getTotalIgnoreFee() > 0 and t.shares > 0:
 									t.pricePerShare = t.getTotalIgnoreFee() / t.shares
 								else:
 									p = stockData.getNearestPrice(ticker, t.date)

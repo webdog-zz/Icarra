@@ -174,16 +174,15 @@ class AutoUpdater(threading.Thread):
 					continue
 			
 			# Download the 2 week lump 10 tickers at a time
-			while updateNow and self.running:
+			while updateNow and self.running and not appGlobal.getFailConnected():
 				downloadPart = updateNow[0:10]
 				updateNow = updateNow[10:]
 				try:
 					new = self.stockData.updateStocks(downloadPart)
 					appGlobal.setConnected(True)
 				except Exception, e:
-					print traceback.format_exc()
 					appGlobal.setFailConnected(True)
-					return
+					break
 				for ticker in downloadPart:
 					self.tickerCount += 1
 					if new:
@@ -192,14 +191,13 @@ class AutoUpdater(threading.Thread):
 
 			# Update each remaining ticker while still running
 			for ticker in tickers:
-				if self.running:
+				if self.running and not appGlobal.getFailConnected():
 					try:
 						new = self.stockData.updateStocks([ticker])
 						appGlobal.setConnected(True)
 					except Exception, e:
-						print traceback.format_exc()
 						appGlobal.setFailConnected(True)
-						return
+						break
 					if new:
 						for p in tickerPorts[ticker]:
 							# Add 3 for every port

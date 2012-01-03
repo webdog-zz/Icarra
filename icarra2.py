@@ -365,6 +365,9 @@ class Icarra2(QApplication):
 		self.portfolio = False
 		self.tool = False
 		self.toolWidget = False
+		
+		# If we notified the user that we failed to connect to the icarra server
+		self.notifieldFailConnected = False
 
 		self.positiveColor = QColor(0, 153, 0)
 		self.negativeColor = QColor(204, 0, 0)
@@ -439,10 +442,16 @@ class Icarra2(QApplication):
 			interval = 3000 - elapsedMs
 			self.timer.setInterval(interval)
 			self.timer.setSingleShot(True)
-			self.timer.start()
 			self.connect(self.timer, SIGNAL("timeout()"), self.hideSplash)
+			self.timer.start()
 		else:
 			self.hideSplash()
+		
+		# Start timer to check for failed connected
+		self.failTimer = QTimer()
+		self.failTimer.setInterval(3000)
+		self.connect(self.failTimer, SIGNAL("timeout()"), self.checkFailTimer)
+		self.failTimer.start()
 
 		self.prefs.incTimesRun()
 		appGlobal.getApp().started = True
@@ -545,6 +554,12 @@ class Icarra2(QApplication):
 		task = self.bigTask
 		self.bigTaskCondition.release()
 		return task
+
+	def checkFailTimer(self):
+		if appGlobal.getFailConnected() and not self.notifieldFailConnected:
+			self.notifieldFailConnected = True
+			
+			QMessageBox(QMessageBox.Critical, "Could not connect", "Icarra could not connect to the stock data server.  You may continue using Icarra but new stock data will not be downloaded until Icarra has been restarted.").exec_()
 
 	def loadPortfolio(self, name):
 		global prefs

@@ -154,11 +154,14 @@ class StockData:
 			request = {"ticker": str(ticker)}
 			return self.s.suggest(request)
 		except Exception, e:
-			print "Exception from server", e, str(e)
+			appGlobal.setFailConnected(True)
 			return False
 
 	def getFromServer(self, request, status = False):
 		'''Return True if new stock data is received'''
+		
+		if appGlobal.getFailConnected():
+			return False
 		
 		# Encode as string
 		icarraTickers = {}
@@ -179,8 +182,8 @@ class StockData:
 				status.setStatus("Receiving Stock Data", 70)
 			data = self.s.getStockZip(request)
 		except Exception, inst:
-			print "Exception from server: ", inst
-			raise
+			appGlobal.setFailConnected(True)
+			return False
 		
 		# Try decompressing
 		# Ignore errors (assume not compressed)
@@ -368,8 +371,10 @@ class StockData:
 			"date": Transaction.parseDate(row["date"]),
 			"value": float(row["value"])}
 
-	def getDividends(self, ticker, desc = False):
+	def getDividends(self, ticker, firstDate = False, desc = False):
 		where = {"ticker": ticker.upper()}
+		if firstDate:
+			where["date >="] = firstDate.strftime("%Y-%m-%d 00:00:00")
 		cursor = self.db.select("stockDividends", where = where, orderBy = "date asc")
 		
 		res = []

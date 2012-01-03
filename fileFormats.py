@@ -180,7 +180,40 @@ class Ofx(FileFormat):
 		return False
 	
 	def Parse(self, ofx, portfolio, status):
+		# Check for matching ORG and FID of other brokerages
+		# Choose proper brokerage if one was not specified
+		match = re.search("<ORG>\s*([^<\n]+)", ofx)
+		if match:
+			checkOrg = match.group(1).strip(" ")
+		else:
+			checkOrg = False
+		match = re.search("<FID>\s*([^<\n]+)", ofx)
+		if match:
+			checkFid = match.group(1).strip(" ")
+		else:
+			checkFid = False
+
+		# User chosen brokerage gets a score of 1
+		# Choose a better brokerage if we match org and fid
 		brokerage = getApp().plugins.getBrokerage(portfolio.brokerage)
+		if brokerage:
+			bestBrokerageScore = 1
+		else:
+			bestBrokerageScore = 0
+		
+		for testBrokerage in getApp().plugins.brokerages.values():
+			score = 0
+			if checkOrg and checkOrg == testBrokerage.getOrg():
+				score += 1
+			if checkFid and checkFid == testBrokerage.getFid():
+				score += 1
+			
+			if score > bestBrokerageScore:
+				brokerage = testBrokerage
+				bestBrokerageScore = score
+				
+				if status:
+					status.addMessage("Using %s brokerage" % brokerage.getName())
 		
 		class ParsedTransaction(dict):
 			def hasKey(self, key):
@@ -391,7 +424,8 @@ class Ofx(FileFormat):
 				status.addError("no uniqueid in %s" % (i))
 				continue
 			
-			brokerage.massageStockInfo(i)
+			if brokerage:
+				brokerage.massageStockInfo(i)
 			
 			# Use ticker first, then secname if ticker is not found
 			if "ticker" in i:

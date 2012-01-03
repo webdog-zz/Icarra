@@ -17,7 +17,7 @@ class Brokerage(BrokerageBase):
 		return "optionxpress.com"
 	
 	def getNotes(self):
-		return ["Short sales are imported as regular sell transactions", "Mutual fund purchases may show up as dividend reinvestments"]
+		return ["Short sales may be imported as regular sell transactions", "Mutual fund purchases may show up as dividend reinvestments", "Other transaction types may be mis-labeled"]
 	
 	def massageStockInfo(self, stockInfo):
 		# Use ticker first, then secname if ticker is not found
@@ -54,14 +54,12 @@ class Brokerage(BrokerageBase):
 
 	def preParseTransaction(self, trans):
 		retTrans = False
-
-		if (trans.keyEqual("type", "sellmf") or trans.keyEqual("type", "sellother")) and trans.keyEqual("units", "0.00"):
-			# Ignore sell with 0 shares.  It's part of a stock dividend.
+		
+		# Ignore sellmf with 0.00 units and 0.00 unitprice
+		if trans.keyEqual("type", "sellmf") and trans.keyEqual("units", "0.00") and trans.keyEqual("unitprice", "0.00"):
 			trans["type"] = "ignore"
-		elif trans.keyEqual("type", "buymf") and trans.keyEqual("unitprice", "0.00"):
-			# Second part of mutual fund dividend
-			trans["type"] = "reinvdiv"
-		elif trans.keyEqual("optselltype", "selltoopen") or trans.keyEqual("optselltype", "selltoclose"):
+
+		if trans.keyEqual("optselltype", "selltoopen") or trans.keyEqual("optselltype", "selltoclose"):
 			# Option transactions have an incorrect unitprice
 			if trans.getKey("units") != "0.00":
 				trans["unitprice"] = str((float(trans.getKey("total")) + float(trans.getKey("commission")) + float(trans.getKey("taxes")) + float(trans.getKey("fees"))) / abs(float(trans.getKey("units"))))
@@ -98,3 +96,41 @@ class Brokerage(BrokerageBase):
 				t.type = Transaction.exercise
 			else:
 				t.type = Transaction.expire
+		
+		# buy with 0 pricePerShare and 0 total is a dividend reinvest if there is a corresponding sell with 0.00 units
+		# buy with 0 pricePerShare and 0 total is a transfer in
+		for t in transactions:
+			if not (t.type == Transaction.buy and t.pricePerShare == 0):
+				continue
+			
+			# Search for sell with 0 shares
+			found = False
+			for t2 in transactions:
+				if t2.ticker == t.ticker and (t2.date - t.date < datetime.timedelta(days = 1)) and t2.type == Transaction.sell:
+					t.type = Transaction.dividendReinvest
+					t.pricePerShare = t2.pricePerShare
+					t.total = t2.total
+					transactions.remove(t2)
+					found = True
+					break
+			
+			if not found:
+				t.type = Transaction.transferIn
+		
+		# Combine buy and dividend transactions into dividendReinvest transactions
+		# Also delete the corresponding sell of 0 shares
+		# Loop over a copy of the list since we will delete from it
+		for t in transactions[:]:
+			if t.type != Transaction.dividend:
+				continue
+			
+			for t2 in transactions:
+				if t2.ticker == t.ticker and (t2.date - t.date < datetime.timedelta(days = 1)) and t2.type == Transaction.sell and t2.shares == 0:
+					transactions.remove(t2)
+					break
+			
+			for t2 in transactions:
+				if t2.ticker == t.ticker and (t2.date - t.date < datetime.timedelta(days = 1)) and t2.type == Transaction.buy and t2.total == t.total:
+					t2.type = Transaction.dividendReinvest
+					transactions.remove(t)
+					break
