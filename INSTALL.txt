@@ -29,6 +29,8 @@ Windows
 
 Download and install PyQt from Riverbank computing.  The most recent url is http://www.riverbankcomputing.co.uk/software/pyqt/download.  You can build from sourec or use the installer.  If you choose to download the installer make sure you pick the correct installer for your version of python.
 
+Download and install the C++ version of Visual Studio 2008 Express from http://www.microsoft.com/visualstudio/en-us/products/2008-editions/express.  Other versions of Visual Studio will require more hacking to be used by python.
+
 You must make sure that the PyQt DLLs are in your path.  The command will look like this If you are using the bashs shell under cygwin:
 
     export PATH="{$PATH}:/cygdrive/c/Python26/Lib/site-packages/PyQt4/bin"
