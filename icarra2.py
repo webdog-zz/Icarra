@@ -764,6 +764,7 @@ if "--rebuild" in sys.argv:
 	
 	try:
 		p = Portfolio(sys.argv[2])
+		app.portfolio = p
 		p.rebuildPositionHistory(app.stockData)
 	except Exception, e:
 		print "Error running regression:"

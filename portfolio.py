@@ -1513,6 +1513,15 @@ class Portfolio:
 								shares = abs(addShares),
 								pricePerShare = price["close"],
 								auto = True)
+						
+						# Insert into transactions list and save to database
+						i = 0
+						for t2 in transactions:
+							if t2.date > t.date:
+								break
+							i += 1
+						transactions.insert(i, t)
+						
 						t.save(self.db)
 					else:
 						if update:
@@ -2035,18 +2044,24 @@ class Portfolio:
 			else:
 				return basisVal / basisShares
 
-		def expireOptions(ticker, optionStrike, optionExpire):
+		def expireOptions(ticker, optionStrike, optionExpire, date):
 			for thisBasis in [longOptionsBasis, shortOptionsBasis]:
 				for d in thisBasis:
 					for i in range(len(thisBasis[d])):
 						(thisTicker, s, pps, strike, expire) = thisBasis[d][i]
+						if ticker.endswith("call"):
+							optionType = Transaction.optionCall
+						else:
+							optionType = Transaction.optionPut
+						price = appGlobal.getApp().stockData.getOptionPrice(thisTicker, optionExpire, optionStrike, date, optionType)
 						if ticker == thisTicker and strike == optionStrike and expire == optionExpire:
 							if s < 0:
-								# Sell to open
-								twrr.coverShares(thisTicker, abs(s) * 100, optionStrike)
-								twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
+								# Sell to open / buy to close
+								#twrr.removeShares(thisTicker + " shares", abs(s) * 100, optionStrike)
+								twrr.coverShares(thisTicker, abs(s), 0)
 							else:
-								# Buy to open
+								# Buy to open / sell to close
+								#twrr.removeShares(thisTicker + " shares", abs(s) * 100, optionStrike)
 								twrr.removeShares(thisTicker, abs(s), 0)
 							removeFromOptionsBasis(thisTicker, s, strike, expire)
 
@@ -2056,24 +2071,23 @@ class Portfolio:
 			
 			for thisBasis in [longOptionsBasis, shortOptionsBasis]:
 				for d in thisBasis:
-					i = 0
-					while i < len(thisBasis[d]):
+					for i in range(len(thisBasis[d])):
+					#while i < len(thisBasis[d]):
 						(thisTicker, s, pps, strike, expire) = thisBasis[d][i]
 						# Expire 2 days after the friday
 						date2 = datetime.datetime(date.year, date.month, date.day)
 						expire2 = datetime.datetime(expire.year, expire.month, expire.day) + datetime.timedelta(days = 2)
 						if date2 >= expire2:
 							expired = True
-							removeFromOptionsBasis(thisTicker, s, strike, expire)
+							expireOptions(ticker, strike, expire, date)
+							'''removeFromOptionsBasis(thisTicker, s, strike, expire)
 							if s > 0:
 								# Buy to open
 								twrr.removeShares(thisTicker, abs(s), 0)
 							elif s < 0:
 								# Sell to open
 								twrr.coverShares(thisTicker, abs(s) * 100, strike)
-								twrr.removeSharesNoPrice(thisTicker + "income", abs(s))
-						else:
-							i += 1
+								twrr.removeSharesNoPrice(thisTicker + "income", abs(s))'''
 			
 			return expired
 		
@@ -2390,13 +2404,6 @@ class Portfolio:
 
 								# Add to basis tracker
 								addToBasis(ticker, t.date, t.shares, t.pricePerShare)
-						elif t.type == Transaction.buyToOpen:
-							totalProfit -= abs(t.total)
-							# Use formatTicker() because it includes strike, option
-							twrr.addShares(t.formatTicker(), t.getShares(), t.pricePerShare)
-							
-							# Add to basis tracker
-							addToOptionsBasis(t.formatTicker(), t.date, t.shares, t.pricePerShare, t.optionStrike, t.optionExpire)
 						elif t.type == Transaction.sell:
 							if shares <= 0:
 								if update:
@@ -2408,8 +2415,17 @@ class Portfolio:
 							
 							# Remove t.shares from basis tracker
 							removeFromBasis(ticker, abs(t.shares))
+						elif t.type == Transaction.buyToOpen:
+							totalProfit -= abs(t.total)
+							# Use formatTicker() because it includes strike, option
+							#twrr.addShares(t.formatTicker() + " shares", t.getShares() * 100, t.optionStrike)
+							twrr.addShares(t.formatTicker(), t.getShares(), t.pricePerShare)
+							
+							# Add to basis tracker
+							addToOptionsBasis(t.formatTicker(), t.date, t.shares, t.pricePerShare, t.optionStrike, t.optionExpire)
 						elif t.type == Transaction.sellToClose:
 							totalProfit += t.getTotal()
+							#twrr.removeShares(t.formatTicker() + " shares", t.getShares() * 100, t.optionStrike)
 							twrr.removeShares(t.formatTicker(), t.getShares(), t.pricePerShare)
 							
 							# Remove t.shares from basis tracker
@@ -2447,24 +2463,20 @@ class Portfolio:
 							
 							# For sellToOpen we track 2 positions: One is exposure to the underlying stock,
 							# the other is the value of the options.  Assume 100 shares per option.
-							twrr.shortShares(t.formatTicker(), t.getShares() * 100, t.optionStrike)
-							
-							twrr.addShares(t.formatTicker() + "income", abs(t.getShares()), 0)
-							twrr.setValue(t.formatTicker() + "income", t.pricePerShare)
+							#twrr.addShares(t.formatTicker() + " shares", t.getShares() * 100, t.optionStrike)
+							twrr.shortShares(t.formatTicker(), t.getShares(), t.pricePerShare)
 							
 							# Add to basis tracker
 							addToOptionsBasis(t.formatTicker(), t.date, -abs(t.shares), t.pricePerShare, t.optionStrike, t.optionExpire)
 						elif t.type == Transaction.buyToClose:
-							finalIncome = getSpecificOptionsBasis(t.optionStrike, t.optionExpire) - t.pricePerShare
-							# buyToClose adds to shares and removes from basis
-							twrr.coverShares(t.formatTicker(), t.getShares() * 100, t.optionStrike)
-							twrr.removeShares(t.formatTicker() + "income", abs(t.getShares()), abs(finalIncome))
+							#twrr.removeShares(t.formatTicker() + " shares", t.getShares() * 100, t.optionStrike)
+							twrr.coverShares(t.formatTicker(), t.getShares(), t.pricePerShare)
 							
 							# Remove t.shares from basis tracker
 							totalProfit += t.getTotal()
 							removeFromOptionsBasis(t.formatTicker(), -abs(t.shares), t.optionStrike, t.optionExpire)
 						elif t.type in [Transaction.assign, Transaction.exercise, Transaction.expire]:
-							expireOptions(t.formatTicker(), t.optionStrike, t.optionExpire)
+							expireOptions(t.formatTicker(), t.optionStrike, t.optionExpire, t.date)
 						elif t.type == Transaction.dividend:
 							todayDividends += t.getTotalIgnoreFee()
 							twrr.addDividend(t.getTotalIgnoreFee())
@@ -2545,10 +2557,7 @@ class Portfolio:
 							shares += adjustShares
 							adjustBasisStockDividend(ticker, adjustShares)
 							
-							if adjustShares > 0:
-								twrr.addShares(ticker, adjustShares, 0)
-							else:
-								twrr.removeShares(ticker, -adjustShares, 0)
+							twrr.stockDividendShares(ticker, adjustShares)
 						elif t.type == Transaction.adjustment:
 							adjustedValue += t.getTotal()
 							twrr.addAdjustment(t.getTotal())
@@ -2629,16 +2638,10 @@ class Portfolio:
 								value -= t.getFee()
 					
 					# Do not automatically expire options
-					#expired = checkOptionsExpiration(ticker, date)
-					#if expired:
-					#	totalTrans += 1
+					expired = checkOptionsExpiration(ticker, date)
+					if expired:
+						totalTrans += 1
 					
-					try:
-						twrr.endTransactions()
-					except Exception, e:
-						if update:
-							update.addException()
-
 					# Build current value based on shares and price
 					if currentPrice < len(prices):
 						# Advance to next price if not cash
@@ -2675,6 +2678,14 @@ class Portfolio:
 						# No price
 						value = 0
 					
+					try:
+						twrr.endTransactions()
+					except Exception, e:
+						if update:
+							update.addException()
+						else:
+							raise
+
 					# Update value based on options
 					# TODO: Calculate value of options better!!!
 					optionsShares = getOptionsShares(ticker)
@@ -4076,7 +4087,7 @@ class Portfolio:
 		
 		# Check for first transaction not buy or no transactions
 		for ticker in self.getPositions():
-			if ticker == "__CASH__" or ticker == "__COMBINED__":
+			if ticker == "__CASH__" or ticker == "__COMBINED__" or ticker == "__BENCHMARK__":
 				continue
 			
 			transactions = self.getTransactions(ticker, limit = 1, ascending = True)
@@ -4085,7 +4096,7 @@ class Portfolio:
 				errors.append(["No transactions", "Minor", "There are no transactions for %s" % ticker])
 				continue
 			
-			if not transactions[0].type in [Transaction.buy, Transaction.transferIn, Transaction.spinoff]:
+			if not transactions[0].type in [Transaction.buy, Transaction.transferIn, Transaction.spinoff, Transaction.short, Transaction.sellToOpen, Transaction.buyToOpen]:
 				errors.append(["First transaction is not buy", "Severe", "The first transaction for %s is not a buy transaction.  This position will not be included in performance calculations.  Add a buy transaction, a transfer transaction or a spinoff transaction for this position." % ticker])
 				
 		# Check for data not matching positionCheck
@@ -4104,14 +4115,14 @@ class Portfolio:
 				if pos:
 					# Check value difference of more than 5%
 					if floatCompare(check.value, pos["value"]) > 1.05 and not didMinor and not didSevere:
-						text = "The computed value for %s  on %s is incorect.  The computed value is %s but the correct value is %s.  This could be due to a missing or incorrect transaction or an incorrect stock value." % (ticker, check.date.strftime("%m/%d/%Y"), Transaction.formatDollar(pos["value"]), Transaction.formatDollar(check.value))
+						text = "The computed value for %s on %s is incorect.  The computed value is %s but the correct value is %s.  This could be due to a missing or incorrect transaction or an incorrect stock value." % (ticker, check.date.strftime("%m/%d/%Y"), Transaction.formatDollar(pos["value"]), Transaction.formatDollar(check.value))
 						if lastCorrectDate:
 							text += "  The last correct date was on %s." % lastCorrectDate.strftime("%m/%d/%Y")
 						errors.append(["Computed value is incorrect", "Minor", text])
 						didMinor = True
 						continue
 
-					if abs(check.shares - pos["shares"]) > 1.0e-6:
+					if abs(check.shares - pos["shares"]) > 1.0e-6 and ticker != "__CASH__":
 						if floatCompare(check.shares, pos["shares"]) < 1.01:
 							if not didMinor:
 								text = "The computed shares for %s on %s is incorrect.  The computed shares is %s but the correct shares is %s.  This could be due to a missing or incorrect buy, sell or stock split transaction." % (ticker, check.date.strftime("%m/%d/%Y"), Transaction.formatFloat(pos["shares"]), Transaction.formatFloat(check.shares))
@@ -4174,18 +4185,7 @@ class Portfolio:
 					date = s["date"]
 					
 					# Determine split value
-					splitVal = "?-?"
-					if s["value"] > 1:
-						# guess denom from 1-10
-						min = 1.0e6
-						minDenom = -1
-						for denom in range(1, 11):
-							num = s["value"] * denom
-							diff = abs(num - round(num))
-							if diff < min * 0.0001:
-								minDenom = denom
-								min = diff
-						splitVal = "%d-%d" % (int(round(s["value"] * minDenom)), minDenom)
+					splitVal = Transaction.splitValueToString(s["value"])
 					
 					# Determine shares for stock dividend
 					shares = "?"

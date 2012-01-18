@@ -781,7 +781,7 @@ class NewTransaction(QDialog):
 		elif shares != "" and pps != "":
 			try:
 				newTotal = float(shares) * float(pps)
-				if type in [Transaction.withdrawal, Transaction.buy, Transaction.buyToOpen]:
+				if type in [Transaction.withdrawal, Transaction.buy, Transaction.buyToOpen, Transaction.buyToClose]:
 					newTotal = -newTotal
 				if fee != "":
 					newTotal -= float(fee)

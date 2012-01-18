@@ -59,6 +59,7 @@ def run(argv):
 			portfolio = Portfolio(portfolioName, customDb = regressionPath)
 		else:
 			portfolio = Portfolio(portfolioName)
+		appGlobal.getApp().portfolio = portfolio
 		if not commit:
 			portfolio.db.beginTransaction()
 		portfolio.rebuildPositionHistory(appGlobal.getApp().stockData)

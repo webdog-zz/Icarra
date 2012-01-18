@@ -341,6 +341,22 @@ class StockData:
 			"low": float(row["low"]),
 			"close": float(row["close"]),
 			"volume": float(row["volume"])}
+	
+	def getOptionPrice(self, ticker, expire, strike, date, type):
+		# This function is currently a placeholder until Icarra supports option prices
+		# This function reads option prices from the portfolio transactions
+		# Extract first token (incase ticker is "VIX Feb-11 $xxx")
+		if ticker.find(" ") != -1:
+			ticker = ticker[:ticker.find(" ")]
+		transactions = appGlobal.getApp().portfolio.getTransactions(ticker, ascending = True)
+		price = False
+		for t in transactions:
+			if not t.type in [Transaction.buyToOpen, Transaction.buyToClose, Transaction.sellToOpen, Transaction.sellToClose] or t.ticker != ticker or t.optionExpire != expire or t.optionStrike != strike or t.subType != type:
+				continue
+			if t.date > date:
+				break
+			price = t.pricePerShare
+		return price
 
 	def getNearestPrice(self, ticker, date):
 		'''Return price closest to date.  Checks within +/- 7 days.'''

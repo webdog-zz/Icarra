@@ -221,6 +221,7 @@ class AutoUpdater(threading.Thread):
 						break
 					if p.portPrefs.getDirty() and p.isBenchmark():
 						try:
+							#print "Rebuilding benchmark", name
 							ports[name].rebuildPositionHistory(self.stockData)
 						except Exception, e:
 							print traceback.format_exc()
@@ -230,6 +231,7 @@ class AutoUpdater(threading.Thread):
 						break
 					if p.portPrefs.getDirty() and p.isBrokerage():
 						try:
+							#print "Rebuilding brokerage", name
 							ports[name].rebuildPositionHistory(self.stockData)
 						except Exception, e:
 							print traceback.format_exc()
@@ -239,6 +241,7 @@ class AutoUpdater(threading.Thread):
 						break
 					if p.portPrefs.getDirty() and p.isCombined():
 						try:
+							#print "Rebuilding combined", name
 							ports[name].rebuildPositionHistory(self.stockData)
 						except Exception, e:
 							print traceback.format_exc()

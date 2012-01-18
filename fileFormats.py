@@ -436,9 +436,6 @@ class Ofx(FileFormat):
 				if status:
 					status.addError("no ticker or secname in %s" % i)
 				continue
-			# Check for duplicate ids
-			if i["uniqueid"] in ids:
-				raise Exception("Duplicate id: %s for %s, stockInfo=%s" % (i["uniqueid"], i, target.stockInfo))
 			
 			# If ticker looks like ABC^^ZZZZ then remove ^^ and everything after (OptionsXpress)
 			if ticker.find("^^") != -1:
@@ -446,6 +443,10 @@ class Ofx(FileFormat):
 			# OptionsXpress may provide a ticker like .XYZ when the real ticker is the first character in the memo
 			if "opttype" in i and ticker.startswith(".") and len(i["memo"]) > 0:
 				ticker = i["memo"].split(" ")[0]
+
+			# Check for duplicate ids with different tickers
+			if i["uniqueid"] in ids and ids[i["uniqueid"]] != ticker:
+				raise Exception("Duplicate id: %s for %s, stockInfo=%s" % (i["uniqueid"], i, target.stockInfo))
 
 			ids[i["uniqueid"]] = ticker
 			stockInfos[i["uniqueid"]] = i
