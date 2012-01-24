@@ -37,6 +37,8 @@ import threading
 class StatusUpdate(QDialog):
 	def __init__(self, parent, modal = True, closeOnFinish = False, cancelable = False, numTextLines = 1):
 		QDialog.__init__(self, parent)
+		self.begin = 0
+		self.end =  100
 		self.finished = False
 		self.canceled = False
 		self.closeOnFinish = closeOnFinish
@@ -124,11 +126,20 @@ class StatusUpdate(QDialog):
 			end = level
 		else:
 			end = begin + round((100 - begin) * level / 100)
+		self.begin = begin
+		self.end = end
 		self.subTasks.append((begin, end))
 
 	def finishSubTask(self, status = False):
 		(begin, end) = self.subTasks[-1]
 		self.subTasks.pop(-1)
+		if len(self.subTasks) > 0:
+			# Load the next sub task
+			(self.begin, self.end) = self.subTasks[-1]
+		else:
+			# No more subtasks
+			self.begin = end
+			self.end = 100
 		self.setStatus(status, end)
 		self.appYield()
 
@@ -140,12 +151,7 @@ class StatusUpdate(QDialog):
 		if status:
 			self.status.setText(status)
 		if level:
-			if len(self.subTasks) > 0:
-				#print self.subTasks
-				(begin, end) = self.subTasks[-1]
-				self.progress.setValue(begin + (end - begin) * level / 100)
-			else:
-				self.progress.setValue(level)
+			self.progress.setValue(self.begin + (self.end - self.begin) * level / 100)
 		if self.progress.value() == 100:
 			self.setFinished()
 		self.appYield()

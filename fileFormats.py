@@ -208,7 +208,7 @@ class Ofx(FileFormat):
 			if checkFid and checkFid == testBrokerage.getFid():
 				score += 1
 			
-			if score > bestBrokerageScore:
+			if score > bestBrokerageScore and brokerage.getName() != portfolio.brokerage:
 				brokerage = testBrokerage
 				bestBrokerageScore = score
 				

@@ -72,7 +72,7 @@ class PerformanceWidget(QWidget):
 		
 		hor.addWidget(QLabel("Type:"))
 		self.chartType = QComboBox()
-		self.chartTypes = ["Value", "Profit", "Performance", "Internal Rate of Return (IRR)"]
+		self.chartTypes = ["Total Value", "Profit", "Return (Time Weighted)", "Return (Internal)"]
 		self.chartType.addItems(self.chartTypes)
 		type = portfolio.portPrefs.getChartType()
 		if type in self.chartTypes:

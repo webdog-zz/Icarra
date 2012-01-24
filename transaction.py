@@ -35,6 +35,10 @@ while not imported:
 
 import locale
 
+# If locale currency is supported
+global useLocaleCurrency
+useLocaleCurrency = True
+
 def dateDict(date):
 	return {"y": date.year, "m": date.month, "d": date.day}
 
@@ -631,7 +635,18 @@ class Transaction:
 		Format a floating point value as a dollar value
 		'''
 
-		return locale.currency(value, grouping = True)
+		global useLocaleCurrency
+		if not useLocaleCurrency:
+			return '$' + Transaction.formatFloat(value, True)
+
+		# Attempt to use locale.currency for formatting.
+		# Fall back to regular numeric values if not supported.
+		try:
+			return locale.currency(value, grouping = True)
+		except:
+			useLocaleCurrency = False
+			return '$' + Transaction.formatFloat(value, True)
+			
 
 	def formatPricePerShare(self):
 		if not self.pricePerShare or self.pricePerShare == "False":
@@ -673,7 +688,7 @@ class Transaction:
 			if self.pricePerShare and self.shares:
 				return abs(self.pricePerShare * self.shares) - self.getFee()
 			return abs(self.total)
-		elif self.type in [Transaction.deposit, Transaction.dividend]:
+		elif self.type in [Transaction.deposit, Transaction.dividend, Transaction.dividendReinvest]:
 			return abs(self.total)
 		elif self.type in [Transaction.withdrawal]:
 			return -abs(self.total)

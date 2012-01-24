@@ -361,14 +361,22 @@ class PortfolioSettingsWidget(QWidget):
 		self.connect(self.summary2, SIGNAL("currentIndexChanged(int)"), self.newSummary2)
 		grid3.addWidget(self.summary2, 2, 1)
 
-		self.autoSplit = QCheckBox("Automatically add split transactions")
+		self.autoAdjust = QCheckBox("Automatically adjust positions")
+		self.autoAdjust.setToolTip("Match your portfolio's correct share counts by automatically adding buy and sell transactions.  It is recommended to use the Error Check tool instead of enabling this option.")
+		if portfolio.portPrefs.getAutoAdjust():
+			self.autoAdjust.setChecked(True)
+		self.connect(self.autoAdjust, SIGNAL("clicked()"), self.twiddleAutoAdjust)
+		grid.addWidget(self.autoAdjust, row, 0, 1, 2)
+		row += 1
+
+		self.autoSplit = QCheckBox("Over-ride split transactions")
 		if portfolio.portPrefs.getAutoSplit():
 			self.autoSplit.setChecked(True)
 		self.connect(self.autoSplit, SIGNAL("clicked()"), self.twiddleAutoSplit)
 		grid.addWidget(self.autoSplit, row, 0, 1, 2)
 		row += 1
 
-		self.autoDividend = QCheckBox("Automatically add dividend transactions")
+		self.autoDividend = QCheckBox("Over-ride dividend transactions")
 		if portfolio.portPrefs.getAutoDividend():
 			self.autoDividend.setChecked(True)
 		self.connect(self.autoDividend, SIGNAL("clicked()"), self.twiddleAutoDividend)
@@ -410,6 +418,7 @@ class PortfolioSettingsWidget(QWidget):
 			if self.hasDelete:
 				self.deleteButton.show()
 			self.summaryFrame.show()
+			self.autoAdjust.show()
 			self.autoSplit.show()
 			self.autoDividend.show()
 			self.autoDividendReinvest.show()
@@ -417,6 +426,7 @@ class PortfolioSettingsWidget(QWidget):
 			if self.hasDelete:
 				self.deleteButton.hide()
 			self.summaryFrame.hide()
+			self.autoAdjust.hide()
 			self.autoSplit.hide()
 			self.autoDividend.hide()
 			self.autoDividendReinvest.hide()
@@ -499,6 +509,10 @@ class PortfolioSettingsWidget(QWidget):
 		typeName = self.chartTypesList[self.summary2.currentIndex()]
 		type = revTypes[typeName]
 		self.app.portfolio.setSummaryChart2(type)
+
+	def twiddleAutoAdjust(self):
+		self.app.portfolio.portPrefs.setAutoAdjust(self.autoAdjust.isChecked())
+		self.app.portfolio.portPrefs.setDirty(True)
 
 	def twiddleAutoSplit(self):
 		self.app.portfolio.portPrefs.setAutoSplit(self.autoSplit.isChecked())

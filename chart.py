@@ -77,9 +77,9 @@ def getSummaryChartTypes(portfolio):
 
 def getChartTypes(portfolio):
 	if portfolio.isBank():
-		return ["Value", "Spending", "Monthly Spending"]
+		return ["Total Value", "Spending", "Monthly Spending"]
 	else:
-		return ["Value", "Profit", "Performance", "Transactions"]
+		return ["Total Value", "Profit", "Return (Time Weighted)", "Transactions"]
 
 class Chart():
 	def __init__(self, parent = None):

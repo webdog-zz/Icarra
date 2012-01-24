@@ -103,9 +103,8 @@ def queryServer(url, query):
 	#print "QUERY"
 	#print query
 
-	# If not windows, replace \n with \r\n
-	if not appGlobal.getApp().isWindows:
-		query = query.replace("\n", "\r\n")
+	query = query.replace("\r", "")
+	query = query.replace("\n", "\r\n")
 	
 	logOfx(query, input = False)
 	

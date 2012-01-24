@@ -267,7 +267,7 @@ class ChartsWidget(QWidget):
 		type = self.chartTypes[self.chartType.currentIndex()]
 		self.app.portfolio.portPrefs.setChartType(type)
 
-		if type == "Value" or type == "Transactions":
+		if type == "Total Value" or type == "Transactions":
 			self.splitCheckbox.setDisabled(True)
 			self.dividendCheckbox.setDisabled(True)
 			self.feeCheckbox.setDisabled(True)

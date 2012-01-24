@@ -77,6 +77,7 @@ class PortfolioPrefs(prefs.Prefs):
 		self.checkDefaults("combinedComponents", "")
 		self.checkDefaults("brokerage", "False")
 		self.checkDefaults("sync", "")
+		self.checkDefaults("autoAdjust", "False")
 		self.checkDefaults("autoSplit", "False")
 		self.checkDefaults("autoDividend", "False")
 		self.checkDefaults("autoDividendReinvest", "False")
@@ -129,6 +130,9 @@ class PortfolioPrefs(prefs.Prefs):
 		if not self.getPreference("sync"):
 			return []
 		return self.getPreference("sync").split(",")
+
+	def getAutoAdjust(self):
+		return self.getPreference("autoAdjust") == "True"
 
 	def getAutoSplit(self):
 		return self.getPreference("autoSplit") == "True"
@@ -207,6 +211,11 @@ class PortfolioPrefs(prefs.Prefs):
 	def setSync(self, value):
 		self.db.beginTransaction()
 		self.db.update("prefs", {"value": value}, {"name": "sync"})
+		self.db.commitTransaction()
+
+	def setAutoAdjust(self, value):
+		self.db.beginTransaction()
+		self.db.update("prefs", {"value": value}, {"name": "autoAdjust"})
 		self.db.commitTransaction()
 
 	def setAutoSplit(self, value):
@@ -940,13 +949,13 @@ class Portfolio:
 		
 		# Filter for transactions in time period, then sum
 		tInDate = filter(lambda t: first <= t.date <= last, transactions)
-		sum = reduce(lambda x, t: x + t.total, tInDate, 0.0)
+		sum = reduce(lambda x, t: x + t.getTotal(), tInDate, 0.0)
 
 		transactions = self.getTransactions(ticker, transType = Transaction.dividendReinvest)
 		
 		# Filter for transactions in time period, then sum
 		tInDate = filter(lambda t: first <= t.date <= last, transactions)
-		sum = reduce(lambda x, t: x + t.total, tInDate, sum)
+		sum = reduce(lambda x, t: x + t.getTotal(), tInDate, sum)
 
 		return sum
 	
@@ -2252,7 +2261,8 @@ class Portfolio:
 				longOptionsBasis = {}
 				shortOptionsBasis = {}
 				
-				self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, cashToAdd, update)
+				if self.portPrefs.getAutoAdjust():
+					self.addPositionCheckTransactions(ticker, transactions, portfolioFirstDate, cashToAdd, update)
 				
 				if self.portPrefs.getAutoSplit() or self.portPrefs.getAutoDividend():
 					self.addAutoSplitDividendTransactions(ticker, transactions, update)
@@ -3026,7 +3036,7 @@ class Portfolio:
 				stockData,
 				"__COMBINED__",
 				chart.oneYear,
-				chartType = "value",
+				chartType = "total value",
 				doGradient = True,
 				doDividend = True,
 				doBenchmark = benchmark,
@@ -3061,7 +3071,7 @@ class Portfolio:
 				stockData,
 				"__COMBINED__",
 				chart.threeMonths,
-				chartType = "value",
+				chartType = "total value",
 				doGradient = True,
 				doDividend = True,
 				doBenchmark = benchmark,
@@ -3096,7 +3106,7 @@ class Portfolio:
 				stockData,
 				"__COMBINED__",
 				chart.portfolioInception,
-				chartType = "value",
+				chartType = "total value",
 				doGradient = True,
 				doDividend = True,
 				doBenchmark = benchmark,
@@ -3164,7 +3174,7 @@ class Portfolio:
 	
 		chartBase.legend = True
 
-	def drawChart(self, chartBase, stockData, tickers, period = chart.oneYear, chartType = "performance", doSplit = False, doDividend = False, doFee = False, doBenchmark = False, doGradient = False, title = False):
+	def drawChart(self, chartBase, stockData, tickers, period = chart.oneYear, chartType = "returns (time weighted)", doSplit = False, doDividend = False, doFee = False, doBenchmark = False, doGradient = False, title = False):
 		# No gradient for spending
 		if chartType == "spending":
 			doGradient = False
@@ -3248,7 +3258,7 @@ class Portfolio:
 			if benchmark and len(benchmarkKeys) == 0:
 				return
 		
-		if chartType in ["value", "profit", "transactions", "spending", "monthly spending"]:
+		if chartType in ["total value", "profit", "transactions", "spending", "monthly spending"]:
 			doDollars = True
 		else:
 			doDollars = False
@@ -3296,7 +3306,7 @@ class Portfolio:
 				d += datetime.timedelta(1)
 	
 			chartTypes = []
-			if chartType == "value":
+			if chartType == "total value":
 				chartTypes.append("value")
 			elif chartType == "transactions":
 				chartTypes.append("transactions")
@@ -3681,9 +3691,9 @@ class Portfolio:
 			
 			if type == "profit":
 				performanceFunc = self.calculatePerformanceProfit
-			elif type == "value":
+			elif type == "total value":
 				performanceFunc = self.calculatePerformanceValue
-			elif type == "internal rate of return (irr)" and t != "__CASH__":
+			elif type == "return (internal)" and t != "__CASH__":
 				# Use time weighted returns for cash
 				performanceFunc = self.calculatePerformanceIRR
 			else:
