@@ -171,6 +171,8 @@ class ToolSelector(QListView):
 		try:
 			index = self.model().index(self.tools.index(name))
 		except:
+			if not "Summary" in self.tools:
+				raise Exception("Could not find builtinPlugins directory")
 			index = self.model().index(self.tools.index("Summary"))
 		self.selectionModel().setCurrentIndex(index, QItemSelectionModel.ClearAndSelect)
 	
@@ -341,7 +343,7 @@ class Icarra2(QApplication):
 		if hasattr(sys, "frozen"):
 			appPath = os.path.dirname(sys.argv[0])
 		else:
-			appPath = os.getcwd()
+			appPath = os.path.abspath(os.path.dirname(sys.argv[0]))
 		appGlobal.setApp(self, appPath)
 		
 		# For thread safe errors

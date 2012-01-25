@@ -25,8 +25,8 @@ class PluginManager:
 		# Load all plugins in builtin path
 		pluginPath = os.path.join(appGlobal.getPath(), 'builtinPlugins')
 		sys.path.append(pluginPath)
-		for file in glob.glob('builtinPlugins/plugin_*.py'):
-			plugin = file.replace('builtinPlugins', '')
+		for file in glob.glob(pluginPath + '/plugin_*.py'):
+			plugin = os.path.basename(file)
 			plugin = plugin.replace('/', '')
 			plugin = plugin.replace('\\', '')
 			plugin = plugin.replace('.py', '')
