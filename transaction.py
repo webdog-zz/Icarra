@@ -40,11 +40,99 @@ global useLocaleCurrency
 useLocaleCurrency = True
 
 def dateDict(date):
+	'''Helper function to convert a datetime class into a dictionary'''
 	return {"y": date.year, "m": date.month, "d": date.day}
 
 class Transaction:
+	'''The Transaction class is one of the most important classes in the
+	Icarra system.  All portfolio calculations revolve around transactions.
+	Importing transactions automatically from brokerages is critical for
+	usability.
+	
+	Every transaction requires a uniqueId, ticker, type and date.  All
+	transactions may have an optional fee.  The unique id is often
+	supplied by the brokerage.  If no unique id is supplied, or the user
+	creates their own transaction, then a new unique id may be generated
+	by calling the Portfolio.getTransactionId() function. The total
+	transaction value is always after fees. The total value may be
+	negative or positive.  The only exception is the adjustment
+	transaction in which case a positive total adds value and a negative
+	total removes value.  The ticker for cash transactions is __CASH__.
+
+	Option positions require an optionStrike (strike price), optionExpire
+	(expire date) and a subType equal to optionPut (1) or optionCall (2).
+	The ticker for an option is the underlying ticker of the option.  Shares
+	is the number of contracts which typically implies that the option is
+	for 100 * shares of the underlying stock.
+
+	The following transaction types are supported:
+	* deposit (0): Cash deposit.  Total is the net amount of deposited cash.
+	* withdrawal (1): Cash withdrawal.  Total is the net amount of withdrawn
+		cash.
+	* expense (2): A fee transaction.  The fee is the total value (if
+		non-zero) or the fee value.
+	* buy (3): A stock purchase.  Shares, pricePerShare and total are
+		required.  Total = shares * pricePerShare + fee
+	* sell (4): A stock sale.  Shares, pricePerShare and total are required.
+		Total = shares * pricePerShare - fee
+	* split (5) A stock split.  Total value is the split ratio.  For
+		example, 2.0 is a 2-1 split (2x shares) and 0.333333 is a 1-3 split
+		(1/3 shares).
+	* dividend (6): A dividend transaction.  Total is the amount of the
+		dividend. Dividends may have an optional subType.  The subType
+		is not used for performance calculations but may be useful for tax
+		purposes.  The available subTypes are:
+			ordinary (1 or no value)
+			qualified (2)
+			capitalGainShortTerm (3)
+			capitalGainLongTerm (4)
+			returnOfCapital (5)
+			taxExempt (6)
+	* adjustment (7): Adjust a position's value by a positive or negative
+		value if total is positive or negative.  It is a better idea to
+		use the other transactions.  Use the expense transaction as a last
+		resort.
+	* stockDividend (8): A stock dividend.  Stock dividends and stock splits
+		are essentially the same type of transaction.  The shares parameter
+		is the number of shares that will be added.
+	* dividendReinvest (9): A stock dividend plus a buy transaction.  Shares,
+		pricePerShare and total are required.  Total is the amount of the
+		dividend and does not modify the portfolio's cash value.
+	* spinoff (10): One position (ticker) spins off shares of another
+		position (ticker2).  This is one of the few transactions that uses
+		the ticker2 field.  Shares is required.
+	* transferIn (11): A combination of a cash deposit plus a buy transaction.
+		Shares and total are required.  PricePerShare is recommended.  This
+		transaction does not modify the cash position.
+	* transferOut (12): A combination of a cash withdrawal plus a sell
+		transaction.  Shares and total are required.  PricePerShare is
+		recommended.  This transaction does not modify the cash position.
+	* short (13): A short transaction.  Shares and pricePerShare are
+		required.  The total value, if any, will be treated as income from
+		the sale and included in the portfolio's performance calculation.
+	* cover (14): Cover previously shorted shares.  Shares and pricePerShare
+		are required.  The total value, if any, will be treated as income
+		from the sale and included in the portfolio's performance
+		calculation.
+	* buyToOpen (18): Shares, pricePerShare and total are required.
+	* sellToClose (19): Close a buyToOpen transaction.  Shares, pricePerShare 
+		and total are required.
+	* sellToOpen (20): Shares, pricePerShare and total are required.  Cash
+		is increased by the total value (sell profit).
+	* buyToClose (21): Close a sellToOpen transaction.  Shares, pricePerShare 
+		and total are required.
+	* expire (22): Expire, exercise and assign remove the option from the
+		portfoio.  The options will be removed at the optionExpire value if
+		no expire, exercise or assign transaction is found.  These
+		transactions are fundamentally the same.  It is expected that there
+		will be a corresponding buyToClose or sellToClose transaction for
+		exercised and assigned options.
+	* exercise (16): See expire.
+	* assign (17): See expire.
+
+	'''
 	# Define transaction type
-	deposit = 0
+	deposit = 0 # test
 	withdrawal = 1
 	expense = 2
 	buy = 3
@@ -84,9 +172,7 @@ class Transaction:
 	optionCall = 2
 
 	def __init__(self, uniqueId, ticker, date, transactionType, amount = False, shares = False, pricePerShare = False, fee = False, edited = False, deleted = False, ticker2 = False, subType = False, optionStrike = False, optionExpire = False, auto = False):
-		# Icarra desktop app ids are in the form __N__ where N is unique (eg, __3__, __7__)
-		# Icarra ids that have been synched with the server are in the form __SN__ where N is a unique number (eg, __S3__, __S7__)
-		# Other ids may be supplied by the brokerage and are assumed to be unique
+		'''Create a new Transaction.  Required fields are described in the Transaction class documentation.'''
 		if type(uniqueId) != bool:
 			self.uniqueId = str(uniqueId)
 		else:
@@ -259,7 +345,7 @@ class Transaction:
 	
 	@staticmethod
 	def parseDate(date):
-		'Return a datetime object for a date in the form "%Y-%m-%d %H:%M:%S"'
+		'''Return a datetime object for a date in the form "%Y-%m-%d %H:%M:%S"'''
 		try:
 			return datetime.datetime(int(date[0:4]), int(date[5:7]), int(date[8:10]),
 				int(date[11:13]), int(date[14:16]), int(date[17:19]))
@@ -268,6 +354,7 @@ class Transaction:
 
 	@staticmethod
 	def ofxDateToSql(date):
+		'''Convert an OFX format date to YYYY-MM-DD HH:MM:S'''
 		if len(date) >= 14:
 			return date[:4] + "-" + date[4:6] + "-" + date[6:8] + " " + date[8:10] + ":" + date[10:12] + ":" + date[12:14]
 		elif len(date) == 8:
@@ -277,27 +364,32 @@ class Transaction:
 	
 	@staticmethod
 	def ameritradeDateToSql(date):
+		'''Convert an ameritrade format date to YYYY-MM-DD HH:MM:S'''
 		# MM-DD-YYYY (or with slashes)
 		return date[6:10] + "-" + date[:2] + "-" + date[3:5] + " 00:00:00"
 	
 	@staticmethod
 	def optionsHouseDateToSql(date):
+		'''Convert an options house format date to YYYY-MM-DD HH:MM:S'''
 		# YYYY-MM-DD (or with slashes)
 		return date[0:4] + "-" + date[5:7] + "-" + date[8:10] + " 00:00:00"
 
 	@staticmethod
 	def forEdit():
+		'''Return all transaction types in suitable order for display purposes'''
 		list = [Transaction.deposit, Transaction.withdrawal, Transaction.buy, Transaction.sell, Transaction.short, Transaction.cover, Transaction.split, Transaction.dividend, Transaction.dividendReinvest, Transaction.expense, Transaction.adjustment, Transaction.stockDividend, Transaction.spinoff, Transaction.tickerChange, Transaction.transferIn, Transaction.transferOut, Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.exercise, Transaction.assign, Transaction.expire]
 		assert(len(list) == Transaction.numTransactionTypes)
 		return list
 	
 	@staticmethod
 	def forEditBank():
+		'''Return all bank transaction types in suitable order for display purposes'''
 		list = [Transaction.deposit, Transaction.withdrawal, Transaction.buy, Transaction.sell, Transaction.dividend, Transaction.dividendReinvest, Transaction.expense, Transaction.adjustment]
 		return list
 
 	@staticmethod
 	def fieldsForTransaction(type, subType = False):
+		'''Return the user editable fields for each transaction type'''
 		if type == Transaction.deposit or type == Transaction.withdrawal:
 			return ["date", "fee", "total"]
 		elif type == Transaction.expense:
@@ -328,6 +420,7 @@ class Transaction:
 			return []
 
 	def formatTicker(self):
+		'''Format the transaction ticker for display purposes'''
 		if self.ticker == "__CASH__":
 			return "Cash Balance"
 		elif self.ticker2:
@@ -347,22 +440,31 @@ class Transaction:
 			return self.ticker
 	
 	def formatTicker1(self):
+		'''Format only the first ticker'''
 		if self.ticker == "__CASH__":
 			return "Cash Balance"
 		else:
 			return self.ticker
 
 	def formatTicker2(self):
+		'''Format only the second ticker (eg, a stock spinoff)'''
 		if self.ticker2 == "__CASH__":
 			return "Cash Balance"
 		else:
 			return self.ticker2
 
+	@staticmethod
+	def formatDateStatic(date):
+		'''Format a datetime class for display purposes'''
+		return str(date.month) + "/" + str(date.day) + "/" + str(date.year)
+
 	def formatDate(self):
-		return str(self.date.month) + "/" + str(self.date.day) + "/" + str(self.date.year)
+		'''Format this transaction's date for display purposes'''
+		return Transaction.formatDateStatic(self.date)
 	
 	@staticmethod
 	def formatDays(days):
+		'''Format a days value for display purposes'''
 		if days > 365:
 			val = days / 365.0
 			desc = 'year'
@@ -378,14 +480,14 @@ class Transaction:
 			return '%.1f %ss' % (val, desc)
 	
 	def dateDict(self):
+		'''Return this transaction's date as a dictionary'''
 		return dateDict(self.date)
 	
 	def getDate(self):
 		return self.date
 	
-	# Return how much this transaction modifies the cash position
-	# Returns 0 if it does not change cash
 	def getCashMod(self):
+		'''Returns the amount of cash this transaction adds or removes from the portfolio.  Returns 0 if it does not change cash.'''
 		if self.type in [Transaction.deposit, Transaction.dividend]:
 			return abs(self.total)
 		elif self.type in [Transaction.sell, Transaction.sellToClose, Transaction.sellToOpen, Transaction.short, Transaction.buyToClose, Transaction.cover]:
@@ -403,7 +505,11 @@ class Transaction:
 		return 0
 	
 	def getIrrFee(self, ticker):
-		'Returns the fee IRR for this transaction'
+		'''Returns the fee IRR for this transaction which is the cash in/out for IRR calculations when adjusted for fees and dividends.
+		
+		The ticker parameter is required since some transactions have two tickers (eg. a spinoff)
+		
+		'''
 		if self.ticker == "__CASH__":
 			if self.type == Transaction.dividend:
 				# Cash dividends increase value on their own, do not include here
@@ -440,7 +546,11 @@ class Transaction:
 				return -self.getCashMod()
 	
 	def getIrrDiv(self, ticker):
-		'Returns the dividend IRR for this transaction (getIrrFee ignoring fees)'
+		'''Returns the dividend IRR for this transaction which is the cash in/out for IRR calculations when adjusted for dividends
+		
+		The ticker parameter is required since some transactions have two tickers (eg. a spinoff)
+		
+		'''
 		if self.ticker == "__CASH__":
 			return self.getIrrFee(ticker) - self.getFee()
 		else:
@@ -451,6 +561,7 @@ class Transaction:
 
 	@staticmethod
 	def getTypeString(type):
+		'''Return this transaction's type for display purposes'''
 		if type == Transaction.deposit:
 			return "Deposit"
 		elif type == Transaction.withdrawal:
@@ -502,6 +613,7 @@ class Transaction:
 	
 	@staticmethod
 	def getType(string):
+		'''Convert a display string to a transaction type.  getType(getTypeString(x)) == x.'''
 		if string == "Deposit":
 			return Transaction.deposit
 		elif string == "Withdrawal":
@@ -553,6 +665,7 @@ class Transaction:
 	
 	@staticmethod
 	def getTransactionOrdering(type):
+		'''Transaction ordering is used by the portfolio rebuilding code to determine which transaction should be processed first if two transactions have the same date.'''
 		if type in [Transaction.deposit, Transaction.transferIn]:
 			return 0
 		elif type in [Transaction.buy, Transaction.short, Transaction.dividendReinvest, Transaction.buyToOpen, Transaction.sellToOpen]:
@@ -567,12 +680,15 @@ class Transaction:
 			return 50
 
 	def hasShares(self):
+		'''Return True if this transaction has a shares field'''
 		return "shares" in self.fieldsForTransaction(self.type)
 
 	def hasPricePerShare(self):
+		'''Return True if this transaction has a pricePerShare field'''
 		return self.type in [Transaction.buy, Transaction.sell, Transaction.dividendReinvest]
 	
 	def formatType(self):
+		'''Format the transaction type for display purposes'''
 		# Check for options
 		if self.isOption():
 			return self.getTypeString(self.type).replace("Options: ", "")
@@ -588,13 +704,12 @@ class Transaction:
 			return self.getTypeString(self.type)
 	
 	def formatShares(self):
+		'''Format the transaction shares for display purposes'''
 		return self.formatFloat(abs(self.shares))
 	
 	@staticmethod
 	def formatFloat(value, commas = False):
-		'''
-		Format a floating point value without any trailing 0s in the decimal portion
-		'''
+		'''Format a floating point value without any trailing 0s in the decimal portion'''
 		if value == 0.0:
 			return "0"
 		if value == False:
@@ -622,7 +737,8 @@ class Transaction:
 		Massage a dollar string such as "-$1,200.50" into "-1200.5" such that it may be converted
 		to a floating point value using locale.atof.  An invalid dollar string may not be convertible
 		to a floating point value after calling this function.  Always encompass the locale.atof
-		call in a try statement
+		call in a try statement.
+		
 		'''
 		value = value.replace("$", "").replace(",", "").replace(" ", "")
 		if len(value) >= 2 and value[0] == '(' and value[-1] == ')':
@@ -631,9 +747,7 @@ class Transaction:
 
 	@staticmethod
 	def formatDollar(value):
-		'''
-		Format a floating point value as a dollar value
-		'''
+		'''Format a floating point value as a dollar value'''
 
 		global useLocaleCurrency
 		if not useLocaleCurrency:
@@ -646,20 +760,22 @@ class Transaction:
 		except:
 			useLocaleCurrency = False
 			return '$' + Transaction.formatFloat(value, True)
-			
-
+	
 	def formatPricePerShare(self):
+		'''Format the transaction pricePerShare for display purposes'''
 		if not self.pricePerShare or self.pricePerShare == "False":
 			return ""
 		return self.formatDollar(self.pricePerShare)
 	
 	def getShares(self):
+		'''Return the number of shares for this transaction'''
 		if self.shares:
 			return abs(self.shares)
 		else:
 			return 0
 	
 	def getFee(self):
+		'''Return the fee for this transaction'''
 		if self.type == Transaction.expense:
 			if self.total:
 				return abs(self.total)
@@ -671,11 +787,13 @@ class Transaction:
 			return 0
 
 	def formatFee(self):
+		'''Format this transaction's fee for display purposes'''
 		if not self.fee or self.fee == "False":
 			return ""
 		return "$" + str(self.fee)
 	
 	def getTotal(self):
+		'''Return this transaction's total value'''
 		if not self.total:
 			return 0
 		
@@ -696,9 +814,11 @@ class Transaction:
 		return self.total
 
 	def getTotalIgnoreFee(self):
+		'''Return this transaction's total + fee value'''
 		return self.getTotal() + self.getFee()
 
 	def formatTotal(self):
+		'''Format this transaction's total for display purposes'''
 		if not self.total:
 			return ""
 		elif self.type in [Transaction.split]:
@@ -713,18 +833,22 @@ class Transaction:
 			return self.formatDollar(self.total)
 	
 	def formatStrike(self):
+		'''Format this transaction's option strike for display purposes'''
 		if not self.optionStrike or self.optionStrike == "False":
 			return ""
 		return self.formatDollar(self.optionStrike)
 
 	def formatExpire(self):
+		'''Format this transaction's option expire for display purposes'''
 		if not self.optionExpire or self.optionExpire == "False":
 			return ""
 		return "%d/%d/%d" % (self.optionExpire.month, self.optionExpire.day, self.optionExpire.year)
 
 	@staticmethod
 	def splitValueToString(value):
-		# Determine split value
+		'''Format a split value (total value for split transactions) for display purposes'''
+		if value < 1.0e-6:
+			return "0-0"
 		splitVal = "?-?"
 		if value == 1:
 			splitVal = "1-1"
@@ -751,12 +875,15 @@ class Transaction:
 		return splitVal
 	
 	def isOption(self):
+		'''Return True if this is an option transaction'''
 		return self.type in [Transaction.buyToOpen, Transaction.sellToClose, Transaction.sellToOpen, Transaction.buyToClose, Transaction.assign, Transaction.exercise, Transaction.expire] or self.optionStrike != False
 	
 	def isBankSpending(self):
+		'''For banking portfolios, return True if this is a spending transaction'''
 		return self.type == Transaction.withdrawal and self.ticker != "__CASH__"
 	
 	def getSaveData(self):
+		'''Return a dictionary of this transaction's values suitable for writing to the database'''
 		return {
 			"uniqueId": self.uniqueId,
 			"ticker": self.ticker,
@@ -776,6 +903,7 @@ class Transaction:
 		}
 	
 	def save(self, db):
+		'''Save this transaction to the passed database.  This is typically Portfolio.db.'''
 		data = self.getSaveData()
 
 		# If uniqueId is supplied make it the criteria for update
@@ -787,8 +915,8 @@ class Transaction:
 		
 		return db.insertOrUpdate("transactions", data, on)
 	
-	# Returns False if no error, string if error
 	def checkError(self):
+		'''Perform a basic sanity check on this transaction.  Returns False if no error, an error string if an error was found.'''
 		fields = self.fieldsForTransaction(self.type)
 
 		if self.type in [Transaction.deposit, Transaction.withdrawal]:
